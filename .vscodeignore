@@ -1,0 +1,4 @@
+DEVELOPMENT.md
+*.vsix
+.gitignore
+tools/**

@@ -1,0 +1,347 @@
+{
+    "name": "git-branches",
+    "displayName": "Git Branches",
+    "description": "Local and remote branches of every open repository, in the Source Control panel.",
+    "version": "1.0.0",
+    "publisher": "AlekVolsk",
+    "author": "AlekVolsk",
+    "license": "MIT",
+    "icon": "images/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/AlekVolsk/vscode-git-branches.git"
+    },
+    "keywords": [
+        "git",
+        "branches",
+        "source control"
+    ],
+    "engines": {
+        "vscode": "^1.94.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "extensionKind": [
+        "workspace"
+    ],
+    "extensionDependencies": [
+        "vscode.git"
+    ],
+    "main": "./out/extension.js",
+    "activationEvents": [
+        "onView:gitBranches.view"
+    ],
+    "scripts": {
+        "build": "npx --yes @vscode/vsce package --no-dependencies -o git-branches.vsix"
+    },
+    "contributes": {
+        "views": {
+            "scm": [
+                {
+                    "id": "gitBranches.view",
+                    "name": "Branches",
+                    "contextualTitle": "Git Branches",
+                    "icon": "images/view-icon.svg"
+                }
+            ]
+        },
+        "viewsWelcome": [
+            {
+                "view": "gitBranches.view",
+                "contents": "No Git repositories are open."
+            }
+        ],
+        "commands": [
+            {
+                "command": "gitBranches.refresh",
+                "title": "Refresh",
+                "category": "Git Branches",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "gitBranches.fetchAll",
+                "title": "Fetch All",
+                "category": "Git Branches",
+                "icon": "$(repo-fetch)"
+            },
+            {
+                "command": "gitBranches.fetchPrune",
+                "title": "Fetch and Prune",
+                "category": "Git Branches",
+                "icon": "$(clear-all)"
+            },
+            {
+                "command": "gitBranches.openBranch",
+                "title": "Checkout on Double Click",
+                "category": "Git Branches"
+            },
+            {
+                "command": "gitBranches.checkout",
+                "title": "Checkout",
+                "category": "Git Branches"
+            },
+            {
+                "command": "gitBranches.createBranchFrom",
+                "title": "New Branch From…",
+                "category": "Git Branches",
+                "icon": "$(git-branch-create)"
+            },
+            {
+                "command": "gitBranches.push",
+                "title": "Push",
+                "category": "Git Branches",
+                "icon": "$(repo-push)"
+            },
+            {
+                "command": "gitBranches.pull",
+                "title": "Pull",
+                "category": "Git Branches",
+                "icon": "$(repo-pull)"
+            },
+            {
+                "command": "gitBranches.rename",
+                "title": "Rename…",
+                "category": "Git Branches",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "gitBranches.runSkill",
+                "title": "Run Skill…",
+                "category": "Git Branches",
+                "icon": "$(sparkle)"
+            },
+            {
+                "command": "gitBranches.deleteLocal",
+                "title": "Delete Local Branch",
+                "category": "Git Branches",
+                "icon": "$(trash)"
+            },
+            {
+                "command": "gitBranches.deleteRemote",
+                "title": "Delete Remote Branch",
+                "category": "Git Branches",
+                "icon": "$(cloud)"
+            }
+        ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "gitBranches.fetchAll",
+                    "when": "view == gitBranches.view",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "gitBranches.fetchPrune",
+                    "when": "view == gitBranches.view",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "gitBranches.refresh",
+                    "when": "view == gitBranches.view",
+                    "group": "navigation@9"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "gitBranches.fetchAll",
+                    "when": "view == gitBranches.view && viewItem == repository",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "gitBranches.fetchPrune",
+                    "when": "view == gitBranches.view && viewItem == repository",
+                    "group": "inline@2"
+                },
+                {
+                    "command": "gitBranches.fetchAll",
+                    "when": "view == gitBranches.view && viewItem == repository",
+                    "group": "1_fetch@1"
+                },
+                {
+                    "command": "gitBranches.fetchPrune",
+                    "when": "view == gitBranches.view && viewItem == repository",
+                    "group": "1_fetch@2"
+                },
+                {
+                    "command": "gitBranches.pull",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.local(\\.current)?(\\.main)?$/",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "gitBranches.push",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.local/",
+                    "group": "inline@2"
+                },
+                {
+                    "command": "gitBranches.checkout",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.(local|remote)(\\.main)?$/",
+                    "group": "1_checkout@1"
+                },
+                {
+                    "command": "gitBranches.createBranchFrom",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\./",
+                    "group": "1_checkout@2"
+                },
+                {
+                    "command": "gitBranches.pull",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.local(\\.current)?(\\.main)?$/",
+                    "group": "2_sync@1"
+                },
+                {
+                    "command": "gitBranches.push",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.local/",
+                    "group": "2_sync@2"
+                },
+                {
+                    "command": "gitBranches.rename",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.local/",
+                    "group": "3_modify@1"
+                },
+                {
+                    "command": "gitBranches.runSkill",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\./",
+                    "group": "4_skill@1"
+                },
+                {
+                    "command": "gitBranches.deleteLocal",
+                    "when": "view == gitBranches.view && viewItem == branch.local",
+                    "group": "9_delete@1"
+                },
+                {
+                    "command": "gitBranches.deleteRemote",
+                    "when": "view == gitBranches.view && viewItem == branch.remote",
+                    "group": "9_delete@2"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "gitBranches.openBranch",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.checkout",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.createBranchFrom",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.push",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.pull",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.rename",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.runSkill",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.deleteLocal",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.deleteRemote",
+                    "when": "false"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Git Branches",
+            "properties": {
+                "gitBranches.skills": {
+                    "type": "array",
+                    "default": [],
+                    "scope": "resource",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "label",
+                            "prompt"
+                        ],
+                        "properties": {
+                            "label": {
+                                "type": "string",
+                                "description": "Name shown in the Run Skill list."
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Prompt put into a new Claude Code session, e.g. `/code-review ${branch}`."
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Optional second line in the list."
+                            }
+                        }
+                    },
+                    "markdownDescription": "Prompts offered by **Run Skill…** above the skills found in `<repository>/.claude/skills` and `~/.claude/skills`. Substituted in `prompt`: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`."
+                },
+                "gitBranches.baseBranch": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "resource",
+                    "markdownDescription": "Branch that ages and fork points are measured against, e.g. `origin/master` or `develop`. Empty: the `HEAD` of `origin`, then of any other remote, then `master`, then `main`."
+                }
+            }
+        },
+        "colors": [
+            {
+                "id": "gitBranches.localBranchForeground",
+                "description": "Label and icon color of local branches in the Branches view.",
+                "defaults": {
+                    "dark": "charts.blue",
+                    "light": "charts.blue",
+                    "highContrast": "charts.blue",
+                    "highContrastLight": "charts.blue"
+                }
+            },
+            {
+                "id": "gitBranches.remoteBranchForeground",
+                "description": "Label and icon color of remote branches in the Branches view.",
+                "defaults": {
+                    "dark": "charts.purple",
+                    "light": "charts.purple",
+                    "highContrast": "charts.purple",
+                    "highContrastLight": "charts.purple"
+                }
+            },
+            {
+                "id": "gitBranches.currentBranchForeground",
+                "description": "Label and icon color of the checked-out branch in the Branches view.",
+                "defaults": {
+                    "dark": "charts.green",
+                    "light": "charts.green",
+                    "highContrast": "charts.green",
+                    "highContrastLight": "charts.green"
+                }
+            },
+            {
+                "id": "gitBranches.mergedBranchForeground",
+                "description": "Label and icon color of branches already merged into the base branch in the Branches view.",
+                "defaults": {
+                    "dark": "#D0607A",
+                    "light": "#8E1B3B",
+                    "highContrast": "#FF7A93",
+                    "highContrastLight": "#8E1B3B"
+                }
+            },
+            {
+                "id": "gitBranches.staleBranchForeground",
+                "description": "Label and icon color of branches older than six months in the Branches view.",
+                "defaults": {
+                    "dark": "disabledForeground",
+                    "light": "disabledForeground",
+                    "highContrast": "disabledForeground",
+                    "highContrastLight": "disabledForeground"
+                }
+            }
+        ]
+    }
+}
