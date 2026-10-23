@@ -7,6 +7,7 @@ const vscode = require('vscode');
 const { BranchAgeService } = require('./branchAgeService');
 const { BranchCommands } = require('./branchCommands');
 const { BranchDecorationProvider } = require('./branchDecorationProvider');
+const { BranchFilterPrompt } = require('./branchFilterPrompt');
 const { BranchTreeProvider } = require('./branchTreeProvider');
 const { SkillLauncher } = require('./skillLauncher');
 
@@ -58,12 +59,14 @@ function start(context, gitApi, log) {
         viewId: VIEW_ID,
         gitPath: gitApi.git.path,
     });
+    const filterPrompt = new BranchFilterPrompt(tree);
 
     context.subscriptions.push(
         ...commands.register(),
         ages,
         tree,
         view,
+        filterPrompt,
         vscode.window.registerFileDecorationProvider(new BranchDecorationProvider()),
         gitApi.onDidOpenRepository((repository) => tree.addRepository(repository)),
         gitApi.onDidCloseRepository((repository) => tree.removeRepository(repository)),
@@ -73,6 +76,8 @@ function start(context, gitApi, log) {
             }
         }),
         vscode.commands.registerCommand('gitBranches.refresh', () => tree.refreshAll()),
+        vscode.commands.registerCommand('gitBranches.editFilter', () => filterPrompt.open()),
+        vscode.commands.registerCommand('gitBranches.clearFilter', () => tree.setFilter('')),
     );
 }
 

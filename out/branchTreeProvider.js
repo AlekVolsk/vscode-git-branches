@@ -2,6 +2,7 @@
 
 const vscode = require('vscode');
 const { BranchDecorationProvider } = require('./branchDecorationProvider');
+const { createNameMatcher, parseFilterWords } = require('./branchFilter');
 const { describeGitError } = require('./gitCli');
 const { RepositoryModel } = require('./repositoryModel');
 const {
@@ -26,9 +27,12 @@ const AGE_SOURCE_TEXT = Object.freeze({
 const STALE_AFTER_MONTHS = 6;
 const PRIMARY_REMOTE = 'origin';
 const OPEN_BRANCH_COMMAND = 'gitBranches.openBranch';
+const EDIT_FILTER_COMMAND = 'gitBranches.editFilter';
+const FILTER_NODE_ID = 'filter';
+const FILTER_PLACEHOLDER = 'Filter branches…';
 
 /**
- * Branches tree: a node per repository when more than one is open, then the Local group
+ * Branches tree: the filter row, a node per repository when more than one is open, then the Local group
  * and a group per remote.
  */
 class BranchTreeProvider {
@@ -36,6 +40,9 @@ class BranchTreeProvider {
     #ages;
     #log;
     #view = undefined;
+    #filterWords = [];
+    #matchName = undefined;
+    #filterGeneration = 0;
     #models = new Map();
     #modelSubscriptions = new Map();
     #firstLoads = new Map();
@@ -119,14 +126,49 @@ class BranchTreeProvider {
         return this.#refreshModel(model);
     }
 
+    get filterText() {
+        return this.#filterWords.join(' ');
+    }
+
+    get filterSummaryText() {
+        const branches = this.models.flatMap((model) => model.branches);
+        if (this.#matchName === undefined) {
+            return `${branches.length} branches`;
+        }
+        const matchedCount = branches.filter((branch) => this.#matchName(branch.name) !== undefined).length;
+        return matchedCount === 0 ? 'no matches' : `${matchedCount} of ${branches.length}`;
+    }
+
+    /**
+     * Repository and group nodes get new ids for every filter, so VS Code shows them expanded
+     * instead of in the state it remembers for the id; branch ids stay the same.
+     */
+    setFilter(text) {
+        const words = parseFilterWords(text);
+        if (words.join(' ') === this.filterText) {
+            return;
+        }
+        this.#filterWords = words;
+        this.#matchName = createNameMatcher(words);
+        this.#filterGeneration += 1;
+        for (const [id, node] of this.#nodes) {
+            if (node.isFiltered === true) {
+                this.#nodes.delete(id);
+            }
+        }
+        this.#onDidChangeTreeData.fire(undefined);
+    }
+
     getTreeItem(node) {
         switch (node.type) {
+            case 'filter':
+                return this.#filterItem(node);
             case 'repository':
                 return this.#repositoryItem(node);
             case 'localGroup':
-                return this.#groupItem(node, 'Local', node.model.local.length, 'device-desktop', true);
+                return this.#groupItem(node, 'Local', 'device-desktop', true);
             case 'remoteGroup':
-                return this.#groupItem(node, node.remoteName, this.#remoteBranches(node).length, 'cloud', false);
+                return this.#groupItem(node, node.remoteName, 'cloud', false);
             default:
                 return this.#branchItem(node);
         }
@@ -137,18 +179,24 @@ class BranchTreeProvider {
             await Promise.all(this.#firstLoads.values());
             const models = [...this.#models.values()]
                 .sort((left, right) => left.rootPath.localeCompare(right.rootPath));
-            if (models.length === 1) {
-                return this.#groupNodes(models[0]);
+            if (models.length === 0) {
+                return [];
             }
-            return models.map((model) => this.#node(`repository:${model.rootPath}`, { type: 'repository', model }));
+            const filterNode = this.#node(FILTER_NODE_ID, { type: 'filter' });
+            if (models.length === 1) {
+                return [filterNode, ...this.#groupNodes(models[0])];
+            }
+            const repositoryNodes = models
+                .filter((model) => this.#hasShownBranches(model.branches))
+                .map((model) => this.#scopedNode(`repository:${model.rootPath}`, { type: 'repository', model }));
+            return [filterNode, ...repositoryNodes];
         }
         switch (node.type) {
             case 'repository':
                 return this.#groupNodes(node.model);
             case 'localGroup':
-                return node.model.local.map((branch) => this.#branchNode(node.model, branch));
             case 'remoteGroup':
-                return this.#remoteBranches(node).map((branch) => this.#branchNode(node.model, branch));
+                return this.#shownBranchesOf(node).map((branch) => this.#branchNode(node.model, branch));
             default:
                 return [];
         }
@@ -205,7 +253,7 @@ class BranchTreeProvider {
         }
         this.#ages.retain(model);
         this.#pruneNodes(model);
-        if (this.#models.size === 1) {
+        if (this.#models.size === 1 || this.#matchName !== undefined) {
             this.#onDidChangeTreeData.fire(undefined);
             return;
         }
@@ -235,6 +283,13 @@ class BranchTreeProvider {
         return node;
     }
 
+    #scopedNode(id, fields) {
+        if (this.#matchName === undefined) {
+            return this.#node(id, fields);
+        }
+        return this.#node(`${id}|filter:${this.#filterGeneration}`, { ...fields, isFiltered: true });
+    }
+
     #groupNodes(model) {
         const remoteNames = [...model.remotes.keys()].sort((left, right) => {
             if (left === PRIMARY_REMOTE || right === PRIMARY_REMOTE) {
@@ -242,13 +297,14 @@ class BranchTreeProvider {
             }
             return left.localeCompare(right);
         });
-        return [
-            this.#node(`local:${model.rootPath}`, { type: 'localGroup', model }),
-            ...remoteNames.map((remoteName) => this.#node(
+        const groupNodes = [
+            this.#scopedNode(`local:${model.rootPath}`, { type: 'localGroup', model }),
+            ...remoteNames.map((remoteName) => this.#scopedNode(
                 `remote:${model.rootPath}:${remoteName}`,
                 { type: 'remoteGroup', model, remoteName },
             )),
         ];
+        return groupNodes.filter((groupNode) => this.#hasShownBranches(this.#branchesOf(groupNode)));
     }
 
     #branchNode(model, branch) {
@@ -257,8 +313,40 @@ class BranchTreeProvider {
         return node;
     }
 
-    #remoteBranches(node) {
-        return node.model.remotes.get(node.remoteName) ?? [];
+    #branchesOf(groupNode) {
+        if (groupNode.type === 'localGroup') {
+            return groupNode.model.local;
+        }
+        return groupNode.model.remotes.get(groupNode.remoteName) ?? [];
+    }
+
+    #shownBranchesOf(groupNode) {
+        return this.#branchesOf(groupNode).filter((branch) => this.#isShown(branch));
+    }
+
+    /**
+     * Without a filter an empty repository or group is still shown.
+     */
+    #hasShownBranches(branches) {
+        return this.#matchName === undefined || branches.some((branch) => this.#isShown(branch));
+    }
+
+    #isShown(branch) {
+        return this.#matchName === undefined || this.#matchName(branch.name) !== undefined;
+    }
+
+    #filterItem(node) {
+        const isFiltering = this.#matchName !== undefined;
+        const item = new vscode.TreeItem(this.filterText, vscode.TreeItemCollapsibleState.None);
+        item.id = node.id;
+        item.description = isFiltering ? this.filterSummaryText : FILTER_PLACEHOLDER;
+        item.tooltip = isFiltering
+            ? 'Branches whose names contain every word. Click to change.'
+            : 'Click to filter the branches by name.';
+        item.iconPath = new vscode.ThemeIcon(isFiltering ? 'filter-filled' : 'search');
+        item.contextValue = isFiltering ? 'filter.active' : 'filter';
+        item.command = { command: EDIT_FILTER_COMMAND, title: 'Filter branches…' };
+        return item;
     }
 
     #repositoryItem(node) {
@@ -271,11 +359,15 @@ class BranchTreeProvider {
         return item;
     }
 
-    #groupItem(node, label, branchCount, icon, isExpanded) {
-        const state = isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
+    #groupItem(node, label, icon, isExpanded) {
+        const isFiltered = node.isFiltered === true;
+        const state = isExpanded || isFiltered
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.Collapsed;
+        const branchCount = this.#branchesOf(node).length;
         const item = new vscode.TreeItem(label, state);
         item.id = node.id;
-        item.description = String(branchCount);
+        item.description = isFiltered ? `${this.#shownBranchesOf(node).length} / ${branchCount}` : String(branchCount);
         item.tooltip = node.type === 'localGroup'
             ? `${branchCount} local branches`
             : `${branchCount} branches on ${node.remoteName}`;
@@ -288,16 +380,27 @@ class BranchTreeProvider {
         const { model, branch } = node;
         const age = this.#ageOf(model, branch);
         const kind = branchKindOf(branch, age);
-        const label = kind === 'current' ? { label: branch.name, highlights: [[0, branch.name.length]] } : branch.name;
-        const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+        const item = new vscode.TreeItem(this.#branchLabel(branch, kind), vscode.TreeItemCollapsibleState.None);
         item.id = node.id;
         item.description = branchDescriptionOf(branch, age);
         const color = new vscode.ThemeColor(BranchDecorationProvider.colorIdFor(kind));
         item.iconPath = new vscode.ThemeIcon(branchIconOf(branch), color);
         item.resourceUri = BranchDecorationProvider.uriFor(kind, node.id);
         item.contextValue = branchContextOf(branch, model.isMainBranch(branch));
-        item.command = { command: OPEN_BRANCH_COMMAND, title: 'Checkout on Double Click', arguments: [node] };
+        item.command = { command: OPEN_BRANCH_COMMAND, title: 'Checkout on double click', arguments: [node] };
         return item;
+    }
+
+    /**
+     * The current branch is bold through a highlight over the whole label, so filter matches
+     * are highlighted only in the other branches.
+     */
+    #branchLabel(branch, kind) {
+        if (kind === 'current') {
+            return { label: branch.name, highlights: [[0, branch.name.length]] };
+        }
+        const highlights = this.#matchName?.(branch.name);
+        return highlights === undefined ? branch.name : { label: branch.name, highlights };
     }
 
     #ageOf(model, branch) {

@@ -39,6 +39,8 @@ class BranchCommands {
             'gitBranches.rename': (node) => this.#rename(node),
             'gitBranches.deleteLocal': (node, selection) => this.#deleteLocal(node, selection),
             'gitBranches.deleteRemote': (node, selection) => this.#deleteRemote(node, selection),
+            'gitBranches.deleteLocalAndRemote': (node, selection) => this.#deleteLocalAndRemote(node, selection),
+            'gitBranches.copyName': (node, selection) => this.#copyName(node, selection),
             'gitBranches.runSkill': (node) => this.#skills.run(node.model, node.branch),
             'gitBranches.fetchAll': (node) => this.#fetch(node, false),
             'gitBranches.fetchPrune': (node) => this.#fetch(node, true),
@@ -85,7 +87,7 @@ class BranchCommands {
                 const tracking = existing.upstream === undefined ? 'has no upstream' : `tracks ${existing.upstream}`;
                 const answer = await vscode.window.showWarningMessage(
                     `A local branch ${existing.name} already exists and ${tracking}.`,
-                    'Checkout Local Branch',
+                    'Checkout local branch',
                 );
                 if (answer === undefined) {
                     return;
@@ -191,7 +193,7 @@ class BranchCommands {
                     + `On ${branch.upstreamRemote} too: push ${newName}, make it the upstream, then delete `
                     + `${branch.upstream} for everyone. These are three separate steps; if one fails, `
                     + 'the ones before it are not undone.',
-            }, 'Locally Only', remoteChoice);
+            }, 'Locally only', remoteChoice);
             if (answer === undefined) {
                 return;
             }
@@ -257,7 +259,7 @@ class BranchCommands {
         }
         if (selected.length > locals.length) {
             const remoteCount = selected.length - locals.length;
-            notes.push(`Remote branches skipped: ${remoteCount}. Delete them with Delete Remote Branch.`);
+            notes.push(`Remote branches skipped: ${remoteCount}. Delete them with "Delete remote branch".`);
         }
 
         let targets = locals.filter((candidate) => !blocked.includes(candidate));
@@ -265,12 +267,12 @@ class BranchCommands {
             vscode.window.showInformationMessage(['Nothing to delete.', ...notes].join(' '));
             return;
         }
-        targets = await this.#withoutDeclinedProtected(targets, 'Delete Locally');
+        targets = await this.#withoutDeclinedProtected(targets, 'Delete locally');
         if (targets.length === 0) {
             return;
         }
 
-        const confirmation = 'Delete Locally';
+        const confirmation = 'Delete locally';
         const answer = await vscode.window.showWarningMessage(
             targets.length === 1
                 ? `Delete the local branch ${targets[0].branch.name}?`
@@ -282,11 +284,19 @@ class BranchCommands {
             return;
         }
 
+        const { failures } = await this.#deleteLocalBranches(targets);
+        await this.#refreshTouched(targets);
+        this.#reportBatchFailures('Could not delete locally', failures);
+    }
+
+    async #deleteLocalBranches(targets) {
+        const deleted = [];
         const unmerged = [];
         const failures = [];
         for (const target of targets) {
             try {
                 await target.model.repository.deleteBranch(target.branch.name, false);
+                deleted.push(target);
             } catch (error) {
                 if (isNotFullyMerged(error)) {
                     unmerged.push(target);
@@ -297,7 +307,7 @@ class BranchCommands {
         }
 
         if (unmerged.length > 0) {
-            const force = 'Force Delete';
+            const force = 'Force delete';
             const forceAnswer = await vscode.window.showWarningMessage(
                 unmerged.length === 1
                     ? `${unmerged[0].branch.name} is not fully merged. Delete it anyway?`
@@ -313,15 +323,14 @@ class BranchCommands {
                 for (const target of unmerged) {
                     try {
                         await target.model.repository.deleteBranch(target.branch.name, true);
+                        deleted.push(target);
                     } catch (error) {
                         failures.push({ target, error });
                     }
                 }
             }
         }
-
-        await this.#refreshTouched(targets);
-        this.#reportBatchFailures('Could not delete locally', failures);
+        return { deleted, failures };
     }
 
     async #deleteRemote(node, selection) {
@@ -332,19 +341,19 @@ class BranchCommands {
         const notes = mainBranchNotes(mainBranches);
         if (selected.length > remoteBranches.length) {
             const localCount = selected.length - remoteBranches.length;
-            notes.push(`Local branches skipped: ${localCount}. Delete them with Delete Local Branch.`);
+            notes.push(`Local branches skipped: ${localCount}. Delete them with "Delete local branch".`);
         }
         if (targets.length === 0) {
             vscode.window.showInformationMessage(['Nothing to delete.', ...notes].join(' '));
             return;
         }
-        targets = await this.#withoutDeclinedProtected(targets, 'Delete on Remote');
+        targets = await this.#withoutDeclinedProtected(targets, 'Delete on remote');
         if (targets.length === 0) {
             return;
         }
 
         const remotes = [...new Set(targets.map((target) => target.branch.remoteName))].join(', ');
-        const confirmation = 'Delete on Remote';
+        const confirmation = 'Delete on remote';
         const answer = await vscode.window.showWarningMessage(
             targets.length === 1
                 ? `Delete ${displayNameOf(targets[0].branch)} on ${remotes}?`
@@ -363,6 +372,12 @@ class BranchCommands {
             return;
         }
 
+        const failures = await this.#deleteRemoteBranches(targets);
+        await this.#refreshTouched(targets);
+        this.#reportBatchFailures('Could not delete on the remote', failures);
+    }
+
+    async #deleteRemoteBranches(targets) {
         const failures = [];
         for (const target of targets) {
             const { model, branch } = target;
@@ -376,8 +391,103 @@ class BranchCommands {
                 failures.push({ target, error });
             }
         }
-        await this.#refreshTouched(targets);
-        this.#reportBatchFailures('Could not delete on the remote', failures);
+        return failures;
+    }
+
+    async #deleteLocalAndRemote(node, selection) {
+        const pairs = localAndRemotePairs(selectedBranchNodes(node, selection));
+        const isMainHalf = ({ model, branch }) => model.isMainBranch(branch);
+        const mainPairs = pairs.filter((pair) => halvesOf([pair]).some(isMainHalf));
+        const checkedOut = pairs.filter((pair) => !mainPairs.includes(pair)
+            && (pair.local?.branch.isHead === true || pair.local?.branch.isInOtherWorktree === true));
+        const notes = mainBranchNotes(halvesOf(mainPairs).filter(isMainHalf));
+        if (checkedOut.length > 0) {
+            notes.push(`Skipped, checked out: ${checkedOut.map((pair) => pair.local.branch.name).join(', ')}.`);
+        }
+
+        let targets = pairs.filter((pair) => !mainPairs.includes(pair) && !checkedOut.includes(pair));
+        if (targets.length === 0) {
+            vscode.window.showInformationMessage(['Nothing to delete.', ...notes].join(' '));
+            return;
+        }
+        const protectedHalves = halvesOf(targets).filter(({ model, branch }) => this.#isProtected(model, branch));
+        if (protectedHalves.length > 0
+            && !(await this.#confirmProtected(protectedHalves, 'Delete locally and on remote'))) {
+            targets = targets.filter((pair) => !halvesOf([pair]).some((half) => protectedHalves.includes(half)));
+        }
+        if (targets.length === 0) {
+            return;
+        }
+
+        const locals = halvesOf(targets).filter(({ branch }) => branch.kind === 'local');
+        const remotes = halvesOf(targets).filter(({ branch }) => branch.kind === 'remote');
+        const notInBase = await this.#notInBase(halvesOf(targets));
+        const names = [...locals, ...remotes].map(({ branch }) => displayNameOf(branch));
+        const confirmation = 'Delete locally and on remote';
+        const answer = await vscode.window.showWarningMessage(
+            names.length <= 2
+                ? `Delete ${names.join(' and ')}?`
+                : `Delete ${locals.length} local and ${remotes.length} remote branches?`,
+            {
+                modal: true,
+                detail: [
+                    remotes.length > 0
+                        ? 'The remote branches are removed from the server for everyone and cannot be undone from here.'
+                        : '',
+                    locals.length > 0 ? `Locally:\n${listBranches(locals)}` : '',
+                    remotes.length > 0 ? `On the remote:\n${listBranches(remotes)}` : '',
+                    notInBase.length > 0 ? `Not merged into the base branch:\n${listBranches(notInBase)}` : '',
+                    ...notes,
+                ].filter((part) => part !== '').join('\n\n'),
+            },
+            confirmation,
+        );
+        if (answer !== confirmation) {
+            return;
+        }
+
+        const { deleted, failures: localFailures } = await this.#deleteLocalBranches(locals);
+        const keptRemotes = new Set(targets
+            .filter((pair) => pair.local !== undefined && pair.remote !== undefined && !deleted.includes(pair.local))
+            .map((pair) => pair.remote));
+        const remoteFailures = await this.#deleteRemoteBranches(remotes.filter((remote) => !keptRemotes.has(remote)));
+        await this.#refreshTouched(halvesOf(targets));
+        this.#reportBatchFailures('Could not delete locally', localFailures);
+        this.#reportBatchFailures('Could not delete on the remote', remoteFailures);
+        if (keptRemotes.size > 0) {
+            const keptNames = [...keptRemotes].map(({ branch }) => displayNameOf(branch)).join(', ');
+            vscode.window.showInformationMessage(`Kept on the remote, the local branch is not deleted: ${keptNames}.`);
+        }
+    }
+
+    async #notInBase(targets) {
+        const result = [];
+        for (const target of targets) {
+            const { model, branch } = target;
+            if (model.base === undefined) {
+                result.push(target);
+                continue;
+            }
+            try {
+                const count = await execGit(
+                    this.#gitPath,
+                    model.rootPath,
+                    ['rev-list', '--count', `${model.base.sha}..${branch.sha}`],
+                );
+                if (Number(count.trim()) !== 0) {
+                    result.push(target);
+                }
+            } catch (error) {
+                this.#log.warn(`Merge check of ${branch.refname} in ${model.rootPath}: ${describeGitError(error)}`);
+                result.push(target);
+            }
+        }
+        return result;
+    }
+
+    async #copyName(node, selection) {
+        const names = new Set(selectedBranchNodes(node, selection).map((candidate) => candidate.branch.name));
+        await vscode.env.clipboard.writeText([...names].join('\n'));
     }
 
     async #fetch(node, isPruning) {
@@ -408,7 +518,7 @@ class BranchCommands {
     }
 
     async #confirmProtected(nodes, action) {
-        const confirmation = `${action} Anyway`;
+        const confirmation = `${action} anyway`;
         const answer = await vscode.window.showWarningMessage(
             nodes.length === 1
                 ? `${displayNameOf(nodes[0].branch)} is protected.`
@@ -511,8 +621,8 @@ class BranchCommands {
         }
         const names = failures.map(({ target }) => displayNameOf(target.branch)).join(', ');
         const firstReason = describeGitError(failures[0].error);
-        vscode.window.showErrorMessage(`${title}: ${names}. ${firstReason}`, 'Show Log').then((answer) => {
-            if (answer === 'Show Log') {
+        vscode.window.showErrorMessage(`${title}: ${names}. ${firstReason}`, 'Show log').then((answer) => {
+            if (answer === 'Show log') {
                 this.#log.show();
             }
         });
@@ -528,6 +638,58 @@ class BranchCommands {
 function selectedBranchNodes(node, selection) {
     const nodes = Array.isArray(selection) && selection.includes(node) ? selection : [node];
     return nodes.filter((candidate) => candidate?.type === 'branch');
+}
+
+/**
+ * A local branch is paired with its upstream, a remote branch with every local branch that tracks it;
+ * a branch without a counterpart forms a pair alone. Halves are shared objects, one per ref.
+ */
+function localAndRemotePairs(nodes) {
+    const halves = new Map();
+    const halfOf = (model, branch) => {
+        if (branch === undefined) {
+            return undefined;
+        }
+        const key = `${model.rootPath}\0${branch.refname}`;
+        if (!halves.has(key)) {
+            halves.set(key, { model, branch });
+        }
+        return halves.get(key);
+    };
+    const pairs = new Map();
+    const addPair = (model, local, remote) => {
+        const key = [model.rootPath, local?.refname ?? '', remote?.refname ?? ''].join('\0');
+        if (!pairs.has(key)) {
+            pairs.set(key, { local: halfOf(model, local), remote: halfOf(model, remote) });
+        }
+    };
+
+    for (const { model, branch } of nodes) {
+        if (branch.kind === 'local') {
+            addPair(model, branch, upstreamBranchOf(model, branch));
+            continue;
+        }
+        const trackers = model.local.filter((local) => local.upstreamRemote === branch.remoteName
+            && local.upstreamBranch === branch.name);
+        if (trackers.length === 0) {
+            addPair(model, undefined, branch);
+        }
+        for (const local of trackers) {
+            addPair(model, local, branch);
+        }
+    }
+    return [...pairs.values()];
+}
+
+function upstreamBranchOf(model, local) {
+    if (local.upstreamRemote === undefined || local.isUpstreamGone) {
+        return undefined;
+    }
+    return model.remotes.get(local.upstreamRemote)?.find((remote) => remote.name === local.upstreamBranch);
+}
+
+function halvesOf(pairs) {
+    return [...new Set(pairs.flatMap((pair) => [pair.local, pair.remote]))].filter((half) => half !== undefined);
 }
 
 function mainBranchNotes(mainBranches) {

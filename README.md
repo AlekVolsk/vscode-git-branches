@@ -2,6 +2,7 @@
 
 A **Branches** section in the Source Control panel with the local and remote branches of every open repository, and the everyday branch operations on them.
 
+- The first row filters the branches by name.
 - One node per repository when several are open; inside it the **Local** group and a group per remote.
 - Local branches show their upstream and how far they are ahead of and behind it.
 - The checked-out branch is bold and has its own color; local and remote branches are colored differently. A branch checked out in another worktree is marked with the worktree icon.
@@ -19,13 +20,20 @@ Or in VS Code: **Extensions** panel → `...` menu → **Install from VSIX…**.
 
 - **Double click** checks a branch out. A remote branch becomes a local branch that tracks it.
 - **Push** and **Pull** are on every local branch, as hover buttons and in the context menu. A branch without an upstream is published with `-u`. Pull on a branch that is not checked out only fast-forwards it.
-- **Fetch All** and **Fetch and Prune** are in the section title and on every repository node. Fetch All prunes too when `git.pruneOnFetch` is on.
-- **Checkout**, **New Branch From…**, **Rename…** and **Run Skill…** are in the context menu.
+- **Fetch all** and **Fetch and prune** are in the section title and on every repository node. **Fetch all** prunes too when `git.pruneOnFetch` is on.
+- **Checkout**, **New branch from…**, **Rename…**, **Run skill…** and **Copy name to clipboard** are in the context menu. The copied name has no remote prefix; with several branches selected, one name per line.
 - **Rename…** can rename the branch on its remote too: it pushes the new name, makes it the upstream and deletes the old name. These are three separate steps; if one fails, the message says which state the remote is left in.
-- **Delete Local Branch** and **Delete Remote Branch** are separate commands with separate confirmations. Both work on a multi-selection and skip the branches of the other kind. The checked-out branch and branches checked out in other worktrees are not deleted; protected branches (the base branch, matches of `git.branchProtection`) only after one more confirmation.
+- **Delete local branch** and **Delete remote branch** are separate commands with separate confirmations. Both work on a multi-selection and skip the branches of the other kind. The checked-out branch and branches checked out in other worktrees are not deleted; protected branches (the base branch, matches of `git.branchProtection`) only after one more confirmation.
+- **Delete local and remote branch** deletes a local branch together with its upstream, or a remote branch together with the local branches that track it, after one confirmation that also names the branches with commits not in the base. The local branch goes first; if it is not fully merged and you decline **Force delete**, the remote branch stays too.
 - **The main branch is never deleted**, neither locally nor on a remote, and is renamed only locally. It is the default branch of the remote — the target of `origin/HEAD`, then of another remote's `HEAD`, then `master`, then `main` — by name, so `master`, `origin/master` and `upstream/master` are all covered.
 
-## Run Skill
+## Filter
+
+Click the first row of the tree and type. The tree follows as you type and keeps only the branches whose names contain every word, in any case; repositories and groups without matches are hidden, the others are expanded, and the matches are highlighted. The row shows how many branches match, each group shows its matches and its total. Closing the input — Enter, Escape or a click elsewhere — keeps the filter; the × on the row clears it.
+
+The filter searches the branches already known here: the local ones and the remote ones as of the last fetch. It does not fetch by itself; after **Fetch all** or **Fetch and prune** the filtered tree follows the new branches.
+
+## Run skill
 
 Opens a new Claude Code session with a prompt about the branch in its input; nothing is sent until you press Enter. The list offers the prompts from `gitBranches.skills`, the skills found in `<repository>/.claude/skills` and `~/.claude/skills`, and a prompt typed by hand.
 
@@ -34,7 +42,7 @@ The session is opened through a command that Claude Code uses internally, so an 
 ## Settings
 
 - `gitBranches.baseBranch` — the branch that ages and fork points are measured against, e.g. `origin/master`. Empty means the `HEAD` of `origin`, then of any other remote, then `master`, then `main`.
-- `gitBranches.skills` — prompts for Run Skill, e.g. `[{ "label": "Review", "prompt": "/code-review ${branch}" }]`. Substituted: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`. A new Claude Code session starts in the workspace folder, so with several repositories open a prompt needs `${repoPath}` to point at the right one.
+- `gitBranches.skills` — prompts for **Run skill…**, e.g. `[{ "label": "Review", "prompt": "/code-review ${branch}" }]`. Substituted: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`. A new Claude Code session starts in the workspace folder, so with several repositories open a prompt needs `${repoPath}` to point at the right one.
 - `git.branchSortOrder` — the built-in Git setting; branches are sorted alphabetically or by committer date.
 
 ## Branch age

@@ -2,7 +2,7 @@
     "name": "git-branches",
     "displayName": "Git Branches",
     "description": "Local and remote branches of every open repository, in the Source Control panel.",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "publisher": "AlekVolsk",
     "author": "AlekVolsk",
     "license": "MIT",
@@ -61,19 +61,31 @@
             },
             {
                 "command": "gitBranches.fetchAll",
-                "title": "Fetch All",
+                "title": "Fetch all",
                 "category": "Git Branches",
                 "icon": "$(repo-fetch)"
             },
             {
                 "command": "gitBranches.fetchPrune",
-                "title": "Fetch and Prune",
+                "title": "Fetch and prune",
                 "category": "Git Branches",
                 "icon": "$(clear-all)"
             },
             {
+                "command": "gitBranches.editFilter",
+                "title": "Filter branches…",
+                "category": "Git Branches",
+                "icon": "$(search)"
+            },
+            {
+                "command": "gitBranches.clearFilter",
+                "title": "Clear filter",
+                "category": "Git Branches",
+                "icon": "$(close)"
+            },
+            {
                 "command": "gitBranches.openBranch",
-                "title": "Checkout on Double Click",
+                "title": "Checkout on double click",
                 "category": "Git Branches"
             },
             {
@@ -83,7 +95,7 @@
             },
             {
                 "command": "gitBranches.createBranchFrom",
-                "title": "New Branch From…",
+                "title": "New branch from…",
                 "category": "Git Branches",
                 "icon": "$(git-branch-create)"
             },
@@ -107,21 +119,33 @@
             },
             {
                 "command": "gitBranches.runSkill",
-                "title": "Run Skill…",
+                "title": "Run skill…",
                 "category": "Git Branches",
                 "icon": "$(sparkle)"
             },
             {
                 "command": "gitBranches.deleteLocal",
-                "title": "Delete Local Branch",
+                "title": "Delete local branch",
                 "category": "Git Branches",
                 "icon": "$(trash)"
             },
             {
                 "command": "gitBranches.deleteRemote",
-                "title": "Delete Remote Branch",
+                "title": "Delete remote branch",
                 "category": "Git Branches",
                 "icon": "$(cloud)"
+            },
+            {
+                "command": "gitBranches.deleteLocalAndRemote",
+                "title": "Delete local and remote branch",
+                "category": "Git Branches",
+                "icon": "$(trash)"
+            },
+            {
+                "command": "gitBranches.copyName",
+                "title": "Copy name to clipboard",
+                "category": "Git Branches",
+                "icon": "$(copy)"
             }
         ],
         "menus": {
@@ -143,6 +167,21 @@
                 }
             ],
             "view/item/context": [
+                {
+                    "command": "gitBranches.clearFilter",
+                    "when": "view == gitBranches.view && viewItem == filter.active",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "gitBranches.editFilter",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "1_filter@1"
+                },
+                {
+                    "command": "gitBranches.clearFilter",
+                    "when": "view == gitBranches.view && viewItem == filter.active",
+                    "group": "1_filter@2"
+                },
                 {
                     "command": "gitBranches.fetchAll",
                     "when": "view == gitBranches.view && viewItem == repository",
@@ -204,6 +243,11 @@
                     "group": "4_skill@1"
                 },
                 {
+                    "command": "gitBranches.copyName",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\./",
+                    "group": "5_copy@1"
+                },
+                {
                     "command": "gitBranches.deleteLocal",
                     "when": "view == gitBranches.view && viewItem == branch.local",
                     "group": "9_delete@1"
@@ -212,9 +256,22 @@
                     "command": "gitBranches.deleteRemote",
                     "when": "view == gitBranches.view && viewItem == branch.remote",
                     "group": "9_delete@2"
+                },
+                {
+                    "command": "gitBranches.deleteLocalAndRemote",
+                    "when": "view == gitBranches.view && viewItem =~ /^branch\\.(local|remote)$/",
+                    "group": "9_delete@3"
                 }
             ],
             "commandPalette": [
+                {
+                    "command": "gitBranches.editFilter",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.clearFilter",
+                    "when": "false"
+                },
                 {
                     "command": "gitBranches.openBranch",
                     "when": "false"
@@ -250,6 +307,14 @@
                 {
                     "command": "gitBranches.deleteRemote",
                     "when": "false"
+                },
+                {
+                    "command": "gitBranches.deleteLocalAndRemote",
+                    "when": "false"
+                },
+                {
+                    "command": "gitBranches.copyName",
+                    "when": "false"
                 }
             ]
         },
@@ -269,7 +334,7 @@
                         "properties": {
                             "label": {
                                 "type": "string",
-                                "description": "Name shown in the Run Skill list."
+                                "description": "Name shown in the Run skill list."
                             },
                             "prompt": {
                                 "type": "string",
@@ -281,7 +346,7 @@
                             }
                         }
                     },
-                    "markdownDescription": "Prompts offered by **Run Skill…** above the skills found in `<repository>/.claude/skills` and `~/.claude/skills`. Substituted in `prompt`: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`."
+                    "markdownDescription": "Prompts offered by **Run skill…** above the skills found in `<repository>/.claude/skills` and `~/.claude/skills`. Substituted in `prompt`: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`."
                 },
                 "gitBranches.baseBranch": {
                     "type": "string",

@@ -3,10 +3,12 @@
 ## Layout
 
 - `out/extension.js` — activation: waits for the built-in Git extension, registers the view, the decoration provider and the commands.
-- `out/branchCommands.js` — branch operations: checkout and double click, new branch, push, pull, rename, local and remote deletion, fetch.
-- `out/skillLauncher.js` — Run Skill: the prompt list, and opening a Claude Code session with the chosen prompt.
+- `out/branchCommands.js` — branch operations: checkout and double click, new branch, push, pull, rename, deletion locally, on the remote or both, copying the name, fetch.
+- `out/skillLauncher.js` — Run skill: the prompt list, and opening a Claude Code session with the chosen prompt.
 - `out/skillPrompts.js` — `SKILL.md` frontmatter parsing and placeholder substitution. No `vscode` import.
-- `out/branchTreeProvider.js` — the Branches tree: repository, Local and remote nodes, refresh scheduling and tooltips.
+- `out/branchTreeProvider.js` — the Branches tree: filter row, repository, Local and remote nodes, filtering, refresh scheduling and tooltips.
+- `out/branchFilter.js` — name matching for the filter: words, case-insensitive substrings, highlight ranges. No `vscode` import.
+- `out/branchFilterPrompt.js` — the input behind the filter row.
 - `out/repositoryModel.js` — the branches of one repository, read with a single `git for-each-ref`, and its resolved base branch.
 - `out/branchAgeService.js` — branch age and fork point, computed on demand, cached and rate-limited.
 - `out/branchDecorationProvider.js` — label colors.
@@ -34,8 +36,9 @@ code --install-extension git-branches.vsix --force
 - **Operations go through the Git extension API**: checkout, branch creation and deletion, push, pull, fetch. That keeps its credential prompts and its state updates. The CLI is used only where the API has no call: `branch -m` for a branch that is not `HEAD`, and `check-ref-format`.
 - **Refspecs are always full** — `refs/heads/a:refs/heads/b`, `:refs/heads/a`. A short name can also match a tag.
 - **Pull of a branch that is not checked out only fast-forwards.** It is `fetch <remote> refs/heads/<upstream>:refs/heads/<branch>` without `+`; a diverged branch is reported and left as it is.
-- **The main branch is never deleted.** It is resolved by name from `origin/HEAD`, another remote's `HEAD`, `master`, `main`, independently of `gitBranches.baseBranch`, and matches locally and on every remote. Its tree items carry a `.main` context suffix that hides both delete commands; the commands also drop it from a multi-selection, and Rename does not offer the remote step for it, because that step deletes the old name on the remote.
-- **Local and remote deletion never share a command or a confirmation.** Each command takes the branches of its own kind out of a multi-selection and reports how many of the other kind it skipped. Remote deletion is `push <remote> :refs/heads/<branch>`.
+- **The main branch is never deleted.** It is resolved by name from `origin/HEAD`, another remote's `HEAD`, `master`, `main`, independently of `gitBranches.baseBranch`, and matches locally and on every remote. Its tree items carry a `.main` context suffix that hides the delete commands; the commands also drop it from a multi-selection, and Rename does not offer the remote step for it, because that step deletes the old name on the remote.
+- **"Delete local branch" and "Delete remote branch" never touch the other kind.** Each takes the branches of its own kind out of a multi-selection and reports how many of the other kind it skipped. Remote deletion is `push <remote> :refs/heads/<branch>`.
+- **"Delete local and remote branch" pairs by tracking, never by name.** A local branch goes with its upstream, a remote branch with every local branch that tracks it; a branch without a counterpart is deleted alone. A pair with the main branch or a checked-out local half is skipped whole. One confirmation lists both halves and the ones with commits outside the base (`rev-list --count <base>..<sha>`). The local half goes first, through the same not-fully-merged check and force-delete prompt as "Delete local branch"; the remote half is deleted only once its local half is gone, so declining force deletion keeps both.
 - **A typed branch name is checked with `git check-ref-format --branch` and must come back unchanged** — the command expands `@{-1}` into another branch's name.
 - **Double click is two opens of the same branch within 500 ms.** A tree view has no double-click event; the item command runs on every open. With `workbench.list.openMode` set to `doubleClick`, every open already is one.
 - **Claude Code is reached through `claude-vscode.editor.open(undefined, prompt)`**, which Claude Code uses internally and does not document. With no session id it opens a new session where Claude Code is set to open and puts the prompt into the input without sending it. The call lives in `SkillLauncher#openClaudeSession` only; when it fails, the prompt goes to the clipboard.
@@ -45,5 +48,8 @@ code --install-extension git-branches.vsix --force
 - **Ages are computed only for branches that are rendered**, with at most four git processes at a time, and cached by repository, base sha, ref and branch sha. The fork point is computed on hover, in `resolveTreeItem`.
 - **Refresh is cheap or skipped.** The Git extension fires a state change after every status run, which includes file saves. A refresh is debounced, deferred while the view is hidden, and redraws the tree only when the `for-each-ref` output, the remotes, `HEAD` or the settings differ from the previous read.
 - **Tree nodes are stable objects per id.** The extension host matches elements by identity, so a redraw of one branch after its age resolves has to fire the same object that `getChildren` returned.
+- **The filter row is the first root item whenever a repository is open.** With none open the root stays empty, so `viewsWelcome` shows. A tree view has no input of its own, and a webview pane above it would take at least 120 px of body height for one line, so the row opens an input box. The filter matches branch names only, against the refs already read; it never fetches.
+- **Under a filter, repository and group nodes get ids with the filter generation** (`…|filter:<n>`), so VS Code shows them expanded instead of in the state it remembers for the id. Branch ids stay the same, so age redraws and double click keep working; a branch moving under another parent node is fine, because a refresh of the root drops every element registration in the extension host. While a filter is on, any repository change redraws the whole tree: a repository can gain or lose matches.
+- **Closing the filter input keeps the filter**, whichever way it closes: the stable API does not tell Escape from a click into the tree.
 - **Label colors go through a `FileDecorationProvider` on `git-branches:` URIs.** A tree item has no color property of its own. The current branch is bold through a highlight over the whole label, and the highlight has its own theme color, `list.highlightForeground`.
 - **Remote URLs are never shown.** They can carry access tokens.
