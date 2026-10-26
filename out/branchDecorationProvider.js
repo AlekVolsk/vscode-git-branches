@@ -1,8 +1,15 @@
+// @ts-check
 'use strict';
 
 const vscode = require('vscode');
 
 const BRANCH_URI_SCHEME = 'git-branches';
+
+/**
+ * @typedef {'local' | 'remote' | 'current' | 'stale' | 'merged'} BranchColorKind
+ */
+
+/** @type {ReadonlyMap<string, string>} color id by {@link BranchColorKind}, looked up by URI authority */
 const COLOR_ID_BY_KIND = new Map([
     ['local', 'gitBranches.localBranchForeground'],
     ['remote', 'gitBranches.remoteBranchForeground'],
@@ -16,14 +23,31 @@ const COLOR_ID_BY_KIND = new Map([
  * a git-branches:// resource URI whose authority is the branch kind.
  */
 class BranchDecorationProvider {
+    /**
+     * @param {BranchColorKind} kind
+     * @returns {string}
+     */
     static colorIdFor(kind) {
-        return COLOR_ID_BY_KIND.get(kind);
+        const colorId = COLOR_ID_BY_KIND.get(kind);
+        if (colorId === undefined) {
+            throw new Error(`No color for the branch kind ${kind}.`);
+        }
+        return colorId;
     }
 
+    /**
+     * @param {BranchColorKind} kind
+     * @param {string} nodeId
+     * @returns {vscode.Uri}
+     */
     static uriFor(kind, nodeId) {
         return vscode.Uri.from({ scheme: BRANCH_URI_SCHEME, authority: kind, path: `/${encodeURIComponent(nodeId)}` });
     }
 
+    /**
+     * @param {vscode.Uri} uri
+     * @returns {vscode.FileDecoration | undefined}
+     */
     provideFileDecoration(uri) {
         if (uri.scheme !== BRANCH_URI_SCHEME) {
             return undefined;
@@ -36,4 +60,4 @@ class BranchDecorationProvider {
     }
 }
 
-module.exports = { BranchDecorationProvider };
+module.exports.BranchDecorationProvider = BranchDecorationProvider;

@@ -2,10 +2,10 @@
     "name": "git-branches",
     "displayName": "Git Branches",
     "description": "Local and remote branches of every open repository, in the Source Control panel.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "publisher": "AlekVolsk",
     "author": "AlekVolsk",
-    "license": "MIT",
+    "license": "BSD-3-Clause",
     "icon": "images/icon.png",
     "repository": {
         "type": "git",
@@ -29,11 +29,10 @@
         "vscode.git"
     ],
     "main": "./out/extension.js",
-    "activationEvents": [
-        "onView:gitBranches.view"
-    ],
+    "activationEvents": [],
     "scripts": {
-        "build": "npx --yes @vscode/vsce package --no-dependencies -o git-branches.vsix"
+        "build": "npx --yes @vscode/vsce package --no-dependencies -o git-branches.vsix",
+        "check": "tsc -p out/jsconfig.json"
     },
     "contributes": {
         "views": {
@@ -408,5 +407,10 @@
                 }
             }
         ]
+    },
+    "devDependencies": {
+        "@types/node": "^20.19.43",
+        "@types/vscode": "1.94.0",
+        "typescript": "^7.0.2"
     }
 }

@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const vscode = require('vscode');
@@ -11,9 +12,55 @@ const {
     shortSha,
 } = require('./branchRefs');
 
+/**
+ * @typedef {import('./branchRefs').Branch} Branch
+ * @typedef {import('./repositoryModel').RepositoryModel} RepositoryModel
+ */
+
+/**
+ * Where an age comes from: `none` — no commits and no reflog entry, `error` — reading the history failed.
+ *
+ * @typedef {'none' | 'error' | 'firstCommit' | 'branchLine' | 'reflog' | 'tip'} AgeSource
+ */
+
+/**
+ * @typedef {object} BranchAge
+ * @property {'pending' | 'resolved'} state
+ * @property {number | undefined} since unix seconds
+ * @property {AgeSource} source
+ * @property {boolean} isMerged
+ */
+
+/**
+ * @typedef {object} AgeResolution
+ * @property {string} rootPath
+ * @property {string} refname
+ */
+
+/**
+ * @typedef {object} AgeJob
+ * @property {string} key
+ * @property {RepositoryModel} model
+ * @property {Branch} branch
+ */
+
+/**
+ * @typedef {object} BaseLine
+ * @property {string} sha base tip the line was read from
+ * @property {Promise<Set<string>>} shas commits of the first-parent line of the base
+ */
+
+/**
+ * @typedef {object} ForkPoint
+ * @property {string} sha short sha
+ * @property {number} date committer date, unix seconds
+ */
+
 const MAX_PARALLEL_GIT = 4;
 const BRANCH_LINE_LIMIT = 1_000;
+/** @type {Readonly<BranchAge>} */
 const AGE_PENDING = Object.freeze({ state: 'pending', since: undefined, source: 'none', isMerged: false });
+/** @type {Readonly<BranchAge>} */
 const AGE_FAILED = Object.freeze({ state: 'resolved', since: undefined, source: 'error', isMerged: false });
 
 /**
@@ -23,24 +70,43 @@ const AGE_FAILED = Object.freeze({ state: 'resolved', since: undefined, source: 
  * A branch pointing at the tip of the base has no commits yet: only the reflog creation entry.
  */
 class BranchAgeService {
+    /** @type {string} */
     #gitPath;
+    /** @type {vscode.LogOutputChannel} */
     #log;
+    /** @type {Map<string, Readonly<BranchAge>>} */
     #results = new Map();
+    /** @type {Set<string>} */
     #queuedKeys = new Set();
+    /** @type {Map<string, BaseLine>} by repository root */
     #baseLines = new Map();
+    /** @type {AgeJob[]} */
     #queue = [];
     #running = 0;
+    /** @type {vscode.EventEmitter<AgeResolution>} */
     #onDidResolve = new vscode.EventEmitter();
 
+    /**
+     * @param {string} gitPath
+     * @param {vscode.LogOutputChannel} log
+     */
     constructor(gitPath, log) {
         this.#gitPath = gitPath;
         this.#log = log;
     }
 
+    /**
+     * @returns {vscode.Event<AgeResolution>}
+     */
     get onDidResolve() {
         return this.#onDidResolve.event;
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {Readonly<BranchAge>} the cached age, or pending while it is computed
+     */
     ageOf(model, branch) {
         const key = this.#keyOf(model, branch);
         const result = this.#results.get(key);
@@ -55,13 +121,27 @@ class BranchAgeService {
         return AGE_PENDING;
     }
 
+    /**
+     * @param {RepositoryModel} model with a resolved base
+     * @param {Branch} branch
+     * @returns {Promise<ForkPoint>}
+     */
     async forkPointOf(model, branch) {
+        if (model.base === undefined) {
+            throw new Error('The base branch is not resolved.');
+        }
         const mergeBaseArgs = ['merge-base', model.base.sha, branch.sha];
         const mergeBase = (await execGit(this.#gitPath, model.rootPath, mergeBaseArgs)).trim();
         const details = await execGit(this.#gitPath, model.rootPath, ['log', '-1', '--format=%ct', mergeBase, '--']);
         return { sha: shortSha(mergeBase), date: Number(details.trim()) };
     }
 
+    /**
+     * Drops cached ages of the branches the repository no longer has.
+     *
+     * @param {RepositoryModel} model
+     * @returns {void}
+     */
     retain(model) {
         const prefix = `${model.rootPath}\0`;
         const currentKeys = new Set(model.branches.map((branch) => this.#keyOf(model, branch)));
@@ -72,6 +152,10 @@ class BranchAgeService {
         }
     }
 
+    /**
+     * @param {string} rootPath
+     * @returns {void}
+     */
     forget(rootPath) {
         this.#baseLines.delete(rootPath);
         const prefix = `${rootPath}\0`;
@@ -82,18 +166,32 @@ class BranchAgeService {
         }
     }
 
+    /**
+     * @returns {void}
+     */
     dispose() {
         this.#queue = [];
         this.#onDidResolve.dispose();
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {string}
+     */
     #keyOf(model, branch) {
         return [model.rootPath, model.base?.sha ?? '', branch.refname, branch.sha].join('\0');
     }
 
+    /**
+     * @returns {void}
+     */
     #pump() {
         while (this.#running < MAX_PARALLEL_GIT && this.#queue.length > 0) {
             const job = this.#queue.shift();
+            if (job === undefined) {
+                break;
+            }
             this.#running += 1;
             this.#compute(job.model, job.branch)
                 .catch((error) => {
@@ -110,7 +208,15 @@ class BranchAgeService {
         }
     }
 
+    /**
+     * @param {RepositoryModel} model with a resolved base
+     * @param {Branch} branch
+     * @returns {Promise<BranchAge>}
+     */
     async #compute(model, branch) {
+        if (model.base === undefined) {
+            throw new Error('The base branch is not resolved.');
+        }
         const ownCommits = await execGit(this.#gitPath, model.rootPath, [
             'log',
             '--reverse',
@@ -140,6 +246,11 @@ class BranchAgeService {
         return resolvedAge(created, created === undefined ? 'none' : 'reflog', false);
     }
 
+    /**
+     * @param {RepositoryModel} model with a resolved base
+     * @param {Branch} branch
+     * @returns {Promise<import('./branchRefs').BranchLine>}
+     */
     async #readBranchLine(model, branch) {
         const [baseLine, log] = await Promise.all([
             this.#baseLineOf(model),
@@ -155,7 +266,14 @@ class BranchAgeService {
         return parseBranchLine(log, baseLine);
     }
 
+    /**
+     * @param {RepositoryModel} model with a resolved base
+     * @returns {Promise<Set<string>>}
+     */
     #baseLineOf(model) {
+        if (model.base === undefined) {
+            throw new Error('The base branch is not resolved.');
+        }
         const cached = this.#baseLines.get(model.rootPath);
         if (cached !== undefined && cached.sha === model.base.sha) {
             return cached.shas;
@@ -167,10 +285,20 @@ class BranchAgeService {
         return shas;
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {Promise<number | undefined>}
+     */
     async #readCreation(model, branch) {
         return parseReflogCreation(await this.#readReflog(model, branch));
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {Promise<string>} empty when the branch has no reflog
+     */
     async #readReflog(model, branch) {
         try {
             return await execGit(this.#gitPath, model.rootPath, [
@@ -187,8 +315,14 @@ class BranchAgeService {
     }
 }
 
+/**
+ * @param {number | undefined} since
+ * @param {AgeSource} source
+ * @param {boolean} isMerged
+ * @returns {BranchAge}
+ */
 function resolvedAge(since, source, isMerged) {
     return { state: 'resolved', since, source, isMerged };
 }
 
-module.exports = { BranchAgeService };
+module.exports.BranchAgeService = BranchAgeService;

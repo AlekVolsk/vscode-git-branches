@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const vscode = require('vscode');
@@ -5,18 +6,31 @@ const vscode = require('vscode');
 const APPLY_DELAY_MS = 150;
 
 /**
+ * @typedef {import('./branchTreeProvider').BranchTreeProvider} BranchTreeProvider
+ */
+
+/**
  * The input behind the filter row. The tree follows the typed text live, and closing the input keeps
  * the filter whichever way it is closed: the stable API does not tell Escape from a click into the tree.
  */
 class BranchFilterPrompt {
+    /** @type {BranchTreeProvider} */
     #tree;
+    /** @type {vscode.InputBox | undefined} */
     #inputBox = undefined;
+    /** @type {NodeJS.Timeout | undefined} */
     #applyTimer = undefined;
 
+    /**
+     * @param {BranchTreeProvider} tree
+     */
     constructor(tree) {
         this.#tree = tree;
     }
 
+    /**
+     * @returns {void}
+     */
     open() {
         if (this.#inputBox !== undefined) {
             this.#inputBox.show();
@@ -46,10 +60,16 @@ class BranchFilterPrompt {
         inputBox.show();
     }
 
+    /**
+     * @returns {void}
+     */
     dispose() {
         this.#inputBox?.dispose();
     }
 
+    /**
+     * @returns {void}
+     */
     #apply() {
         clearTimeout(this.#applyTimer);
         this.#applyTimer = undefined;
@@ -61,4 +81,4 @@ class BranchFilterPrompt {
     }
 }
 
-module.exports = { BranchFilterPrompt };
+module.exports.BranchFilterPrompt = BranchFilterPrompt;

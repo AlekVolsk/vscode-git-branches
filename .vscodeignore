@@ -1,4 +1,7 @@
-DEVELOPMENT.md
+.claude/**
+CLAUDE.md
 *.vsix
 .gitignore
 tools/**
+**/jsconfig.json
+package-lock.json

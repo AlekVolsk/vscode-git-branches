@@ -8,6 +8,8 @@ A **Branches** section in the Source Control panel with the local and remote bra
 - The checked-out branch is bold and has its own color; local and remote branches are colored differently. A branch checked out in another worktree is marked with the worktree icon.
 - Every branch shows its age first, so it survives a narrow panel. A branch already merged into the base is marked `merged` and is burgundy; other branches older than six months are gray. The tooltip adds the last commit, the base branch, the fork point and where the age comes from.
 
+> This extension was created and is maintained with the help of AI tools.
+
 ## Installation
 
 ```bash
@@ -63,6 +65,10 @@ All colors can be overridden in `workbench.colorCustomizations`:
 
 The checked-out branch keeps its own color in any case.
 
+## Changelog
+
+Release pages carry no detailed notes; what changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
-MIT.
+BSD 3-Clause License.

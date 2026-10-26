@@ -1,8 +1,74 @@
+// @ts-check
 'use strict';
 
 const vscode = require('vscode');
 const { describeGitError, execGit } = require('./gitCli');
 const { displayNameOf } = require('./branchRefs');
+
+/**
+ * @typedef {import('./branchRefs').Branch} Branch
+ * @typedef {import('./branchRefs').LocalBranch} LocalBranch
+ * @typedef {import('./branchRefs').RemoteBranch} RemoteBranch
+ * @typedef {import('./repositoryModel').RepositoryModel} RepositoryModel
+ * @typedef {import('./branchTreeProvider').BranchTreeProvider} BranchTreeProvider
+ * @typedef {import('./branchTreeProvider').TreeNode} TreeNode
+ * @typedef {import('./branchTreeProvider').BranchNode} BranchNode
+ * @typedef {import('./branchTreeProvider').RepositoryNode} RepositoryNode
+ * @typedef {import('./skillLauncher').SkillLauncher} SkillLauncher
+ */
+
+/**
+ * A branch together with its repository: a tree node, or one half of a local and remote pair.
+ *
+ * @typedef {{model: RepositoryModel, branch: Branch}} BranchTarget
+ * @typedef {{model: RepositoryModel, branch: LocalBranch}} LocalTarget
+ * @typedef {{model: RepositoryModel, branch: RemoteBranch}} RemoteTarget
+ * @typedef {BranchNode & {branch: LocalBranch}} LocalBranchNode
+ */
+
+/**
+ * A local branch with its upstream, a remote branch with a local branch that tracks it, or a branch alone.
+ *
+ * @typedef {object} BranchPair
+ * @property {LocalTarget | undefined} local
+ * @property {RemoteTarget | undefined} remote
+ */
+
+/**
+ * @typedef {object} BranchFailure
+ * @property {BranchTarget} target
+ * @property {unknown} error
+ */
+
+/**
+ * @typedef {object} BranchCommandsOptions
+ * @property {BranchTreeProvider} tree
+ * @property {SkillLauncher} skills
+ * @property {vscode.LogOutputChannel} log
+ * @property {string} viewId
+ * @property {string} gitPath
+ */
+
+/**
+ * Arguments as VS Code passes them: the clicked node and, from a context menu, the whole selection.
+ * The `when` clauses of the menus decide which node types reach which command.
+ *
+ * @typedef {{
+ *     'gitBranches.openBranch': (node: BranchNode) => Promise<void>,
+ *     'gitBranches.checkout': (node: BranchNode) => Promise<void>,
+ *     'gitBranches.createBranchFrom': (node: BranchNode) => Promise<void>,
+ *     'gitBranches.push': (node: LocalBranchNode) => Promise<void>,
+ *     'gitBranches.pull': (node: LocalBranchNode) => Promise<void>,
+ *     'gitBranches.rename': (node: LocalBranchNode) => Promise<void>,
+ *     'gitBranches.deleteLocal': (node: BranchNode, selection: TreeNode[] | undefined) => Promise<void>,
+ *     'gitBranches.deleteRemote': (node: BranchNode, selection: TreeNode[] | undefined) => Promise<void>,
+ *     'gitBranches.deleteLocalAndRemote': (node: BranchNode, selection: TreeNode[] | undefined) => Promise<void>,
+ *     'gitBranches.copyName': (node: BranchNode, selection: TreeNode[] | undefined) => Promise<void>,
+ *     'gitBranches.runSkill': (node: BranchNode) => Promise<void>,
+ *     'gitBranches.fetchAll': (node: RepositoryNode | undefined) => Promise<void>,
+ *     'gitBranches.fetchPrune': (node: RepositoryNode | undefined) => Promise<void>,
+ * }} BranchCommandHandlers
+ */
 
 const DOUBLE_CLICK_MS = 500;
 const LISTED_BRANCHES_LIMIT = 10;
@@ -14,13 +80,22 @@ const BRANCH_NOT_FULLY_MERGED = 'BranchNotFullyMerged';
  * progress apply; renaming goes through the CLI, which the API cannot do for a branch that is not HEAD.
  */
 class BranchCommands {
+    /** @type {BranchTreeProvider} */
     #tree;
+    /** @type {SkillLauncher} */
     #skills;
+    /** @type {vscode.LogOutputChannel} */
     #log;
+    /** @type {string} */
     #viewId;
+    /** @type {string} */
     #gitPath;
+    /** @type {{nodeId: string | undefined, at: number}} the last single open, for double click */
     #lastOpen = { nodeId: undefined, at: 0 };
 
+    /**
+     * @param {BranchCommandsOptions} options
+     */
     constructor({ tree, skills, log, viewId, gitPath }) {
         this.#tree = tree;
         this.#skills = skills;
@@ -29,7 +104,11 @@ class BranchCommands {
         this.#gitPath = gitPath;
     }
 
+    /**
+     * @returns {vscode.Disposable[]}
+     */
     register() {
+        /** @type {BranchCommandHandlers} */
         const handlers = {
             'gitBranches.openBranch': (node) => this.#openBranch(node),
             'gitBranches.checkout': (node) => this.#checkout(node),
@@ -49,16 +128,24 @@ class BranchCommands {
             command,
             async (...args) => {
                 try {
-                    await handler(...args);
+                    await /** @type {(...args: unknown[]) => Promise<void>} */ (handler)(...args);
                 } catch (error) {
-                    const title = error?.operationTitle === undefined ? command : `${error.operationTitle} failed`;
+                    const operationTitle = typeof error === 'object' && error !== null && 'operationTitle' in error
+                        ? error.operationTitle
+                        : undefined;
+                    const title = operationTitle === undefined ? command : `${operationTitle} failed`;
                     this.#reportFailure(title, error);
                 }
             },
         ));
     }
 
+    /**
+     * @param {BranchNode} node
+     * @returns {Promise<void>}
+     */
     async #openBranch(node) {
+        /** @type {string} */
         const openMode = vscode.workspace.getConfiguration('workbench.list').get('openMode', 'singleClick');
         const now = Date.now();
         const isDoubleClick = openMode === 'doubleClick'
@@ -69,6 +156,10 @@ class BranchCommands {
         }
     }
 
+    /**
+     * @param {BranchNode} node
+     * @returns {Promise<void>}
+     */
     async #checkout(node) {
         const { model, branch } = node;
         if (branch.kind === 'local') {
@@ -105,10 +196,19 @@ class BranchCommands {
         });
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {string} name
+     * @returns {Thenable<void>}
+     */
     #checkoutLocal(model, name) {
         return this.#withProgress(model, `Checkout ${name}`, () => model.repository.checkout(name));
     }
 
+    /**
+     * @param {BranchNode} node
+     * @returns {Promise<void>}
+     */
     async #createBranchFrom(node) {
         const { model, branch } = node;
         const name = await this.#askBranchName(model, `New branch from ${displayNameOf(branch)}`, '');
@@ -118,6 +218,10 @@ class BranchCommands {
         await this.#withProgress(model, `Create ${name}`, () => model.repository.createBranch(name, true, branch.sha));
     }
 
+    /**
+     * @param {LocalBranchNode} node
+     * @returns {Promise<void>}
+     */
     async #push(node) {
         const { model, branch } = node;
         if (branch.upstreamRemote !== undefined) {
@@ -141,6 +245,10 @@ class BranchCommands {
         );
     }
 
+    /**
+     * @param {LocalBranchNode} node
+     * @returns {Promise<void>}
+     */
     async #pull(node) {
         const { model, branch } = node;
         if (branch.upstreamRemote === undefined) {
@@ -173,6 +281,10 @@ class BranchCommands {
         }
     }
 
+    /**
+     * @param {LocalBranchNode} node
+     * @returns {Promise<void>}
+     */
     async #rename(node) {
         const { model, branch } = node;
         if (this.#isProtected(model, branch) && !(await this.#confirmProtected([node], 'Rename'))) {
@@ -246,9 +358,14 @@ class BranchCommands {
         }
     }
 
+    /**
+     * @param {BranchNode} node
+     * @param {TreeNode[] | undefined} selection
+     * @returns {Promise<void>}
+     */
     async #deleteLocal(node, selection) {
         const selected = selectedBranchNodes(node, selection);
-        const locals = selected.filter((candidate) => candidate.branch.kind === 'local');
+        const locals = selected.filter(isLocalTarget);
         const mainBranches = locals.filter((candidate) => candidate.model.isMainBranch(candidate.branch));
         const checkedOut = locals.filter((candidate) => !mainBranches.includes(candidate)
             && (candidate.branch.isHead || candidate.branch.isInOtherWorktree));
@@ -289,6 +406,12 @@ class BranchCommands {
         this.#reportBatchFailures('Could not delete locally', failures);
     }
 
+    /**
+     * A branch that is not fully merged is deleted only after a second confirmation.
+     *
+     * @param {BranchTarget[]} targets
+     * @returns {Promise<{deleted: BranchTarget[], failures: BranchFailure[]}>}
+     */
     async #deleteLocalBranches(targets) {
         const deleted = [];
         const unmerged = [];
@@ -333,9 +456,14 @@ class BranchCommands {
         return { deleted, failures };
     }
 
+    /**
+     * @param {BranchNode} node
+     * @param {TreeNode[] | undefined} selection
+     * @returns {Promise<void>}
+     */
     async #deleteRemote(node, selection) {
         const selected = selectedBranchNodes(node, selection);
-        const remoteBranches = selected.filter((candidate) => candidate.branch.kind === 'remote');
+        const remoteBranches = selected.filter(isRemoteTarget);
         const mainBranches = remoteBranches.filter((candidate) => candidate.model.isMainBranch(candidate.branch));
         let targets = remoteBranches.filter((candidate) => !mainBranches.includes(candidate));
         const notes = mainBranchNotes(mainBranches);
@@ -377,6 +505,10 @@ class BranchCommands {
         this.#reportBatchFailures('Could not delete on the remote', failures);
     }
 
+    /**
+     * @param {RemoteTarget[]} targets
+     * @returns {Promise<BranchFailure[]>}
+     */
     async #deleteRemoteBranches(targets) {
         const failures = [];
         for (const target of targets) {
@@ -394,15 +526,21 @@ class BranchCommands {
         return failures;
     }
 
+    /**
+     * @param {BranchNode} node
+     * @param {TreeNode[] | undefined} selection
+     * @returns {Promise<void>}
+     */
     async #deleteLocalAndRemote(node, selection) {
         const pairs = localAndRemotePairs(selectedBranchNodes(node, selection));
+        /** @type {(half: BranchTarget) => boolean} */
         const isMainHalf = ({ model, branch }) => model.isMainBranch(branch);
         const mainPairs = pairs.filter((pair) => halvesOf([pair]).some(isMainHalf));
         const checkedOut = pairs.filter((pair) => !mainPairs.includes(pair)
             && (pair.local?.branch.isHead === true || pair.local?.branch.isInOtherWorktree === true));
         const notes = mainBranchNotes(halvesOf(mainPairs).filter(isMainHalf));
         if (checkedOut.length > 0) {
-            notes.push(`Skipped, checked out: ${checkedOut.map((pair) => pair.local.branch.name).join(', ')}.`);
+            notes.push(`Skipped, checked out: ${checkedOut.map((pair) => pair.local?.branch.name).join(', ')}.`);
         }
 
         let targets = pairs.filter((pair) => !mainPairs.includes(pair) && !checkedOut.includes(pair));
@@ -419,8 +557,8 @@ class BranchCommands {
             return;
         }
 
-        const locals = halvesOf(targets).filter(({ branch }) => branch.kind === 'local');
-        const remotes = halvesOf(targets).filter(({ branch }) => branch.kind === 'remote');
+        const locals = halvesOf(targets).filter(isLocalTarget);
+        const remotes = halvesOf(targets).filter(isRemoteTarget);
         const notInBase = await this.#notInBase(halvesOf(targets));
         const names = [...locals, ...remotes].map(({ branch }) => displayNameOf(branch));
         const confirmation = 'Delete locally and on remote';
@@ -448,8 +586,9 @@ class BranchCommands {
 
         const { deleted, failures: localFailures } = await this.#deleteLocalBranches(locals);
         const keptRemotes = new Set(targets
-            .filter((pair) => pair.local !== undefined && pair.remote !== undefined && !deleted.includes(pair.local))
-            .map((pair) => pair.remote));
+            .filter((pair) => pair.local !== undefined && !deleted.includes(pair.local))
+            .map((pair) => pair.remote)
+            .filter((remote) => remote !== undefined));
         const remoteFailures = await this.#deleteRemoteBranches(remotes.filter((remote) => !keptRemotes.has(remote)));
         await this.#refreshTouched(halvesOf(targets));
         this.#reportBatchFailures('Could not delete locally', localFailures);
@@ -460,6 +599,11 @@ class BranchCommands {
         }
     }
 
+    /**
+     * @template {BranchTarget} T
+     * @param {T[]} targets
+     * @returns {Promise<T[]>} the targets with commits outside the base, and the ones that could not be checked
+     */
     async #notInBase(targets) {
         const result = [];
         for (const target of targets) {
@@ -485,11 +629,21 @@ class BranchCommands {
         return result;
     }
 
+    /**
+     * @param {BranchNode} node
+     * @param {TreeNode[] | undefined} selection
+     * @returns {Promise<void>}
+     */
     async #copyName(node, selection) {
         const names = new Set(selectedBranchNodes(node, selection).map((candidate) => candidate.branch.name));
         await vscode.env.clipboard.writeText([...names].join('\n'));
     }
 
+    /**
+     * @param {RepositoryNode | undefined} node `undefined` for every repository
+     * @param {boolean} isPruning
+     * @returns {Promise<void>}
+     */
     async #fetch(node, isPruning) {
         const models = node?.type === 'repository' ? [node.model] : this.#tree.models;
         const failures = [];
@@ -509,6 +663,12 @@ class BranchCommands {
         }
     }
 
+    /**
+     * @template {BranchTarget} T
+     * @param {T[]} targets
+     * @param {string} action
+     * @returns {Promise<T[]>}
+     */
     async #withoutDeclinedProtected(targets, action) {
         const protectedTargets = targets.filter((target) => this.#isProtected(target.model, target.branch));
         if (protectedTargets.length === 0 || (await this.#confirmProtected(protectedTargets, action))) {
@@ -517,6 +677,11 @@ class BranchCommands {
         return targets.filter((target) => !protectedTargets.includes(target));
     }
 
+    /**
+     * @param {BranchTarget[]} nodes
+     * @param {string} action
+     * @returns {Promise<boolean>}
+     */
     async #confirmProtected(nodes, action) {
         const confirmation = `${action} anyway`;
         const answer = await vscode.window.showWarningMessage(
@@ -533,6 +698,11 @@ class BranchCommands {
         return answer === confirmation;
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {boolean}
+     */
     #isProtected(model, branch) {
         if (model.isMainBranch(branch) || model.isBaseLike(branch)) {
             return true;
@@ -548,6 +718,11 @@ class BranchCommands {
         });
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {string} title
+     * @returns {Promise<string | undefined>}
+     */
     async #pickRemote(model, title) {
         const remotes = model.repository.state.remotes.map((remote) => remote.name);
         if (remotes.length === 0) {
@@ -564,6 +739,13 @@ class BranchCommands {
         return vscode.window.showQuickPick(ordered, { title });
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {string} title
+     * @param {string} value
+     * @param {string} [currentName] accepted as is
+     * @returns {Thenable<string | undefined>}
+     */
     #askBranchName(model, title, value, currentName) {
         return vscode.window.showInputBox({
             title,
@@ -573,6 +755,12 @@ class BranchCommands {
         });
     }
 
+    /**
+     * @param {RepositoryModel} model
+     * @param {string} name
+     * @param {string | undefined} currentName
+     * @returns {Promise<string | undefined>}
+     */
     async #branchNameProblem(model, name, currentName) {
         if (name === '' || name === currentName) {
             return name === '' ? 'Enter a branch name.' : undefined;
@@ -591,6 +779,14 @@ class BranchCommands {
         }
     }
 
+    /**
+     * A failure is rethrown with `operationTitle` set, unless it already has one.
+     *
+     * @param {RepositoryModel} model
+     * @param {string} title
+     * @param {() => PromiseLike<unknown>} task
+     * @returns {Thenable<void>}
+     */
     #withProgress(model, title, task) {
         return vscode.window.withProgress({ location: { viewId: this.#viewId }, title }, async () => {
             this.#log.info(`${title} (${model.rootPath})`);
@@ -598,19 +794,28 @@ class BranchCommands {
                 await task();
             } catch (error) {
                 if (error !== null && typeof error === 'object') {
-                    error.operationTitle ??= title;
+                    /** @type {{operationTitle?: unknown}} */ (error).operationTitle ??= title;
                 }
                 throw error;
             }
         });
     }
 
+    /**
+     * @param {BranchTarget[]} nodes
+     * @returns {Promise<void>}
+     */
     async #refreshTouched(nodes) {
         for (const model of new Set(nodes.map((node) => node.model))) {
             await this.#tree.refreshRepository(model);
         }
     }
 
+    /**
+     * @param {string} title
+     * @param {BranchFailure[]} failures
+     * @returns {void}
+     */
     #reportBatchFailures(title, failures) {
         if (failures.length === 0) {
             return;
@@ -628,6 +833,11 @@ class BranchCommands {
         });
     }
 
+    /**
+     * @param {string} title
+     * @param {unknown} error
+     * @returns {void}
+     */
     #reportFailure(title, error) {
         const reason = describeGitError(error);
         this.#log.error(`${title}: ${reason}`);
@@ -635,17 +845,50 @@ class BranchCommands {
     }
 }
 
+/**
+ * @param {BranchNode} node
+ * @param {TreeNode[] | undefined} selection
+ * @returns {BranchNode[]} the selection when it contains the node, otherwise the node alone
+ */
 function selectedBranchNodes(node, selection) {
     const nodes = Array.isArray(selection) && selection.includes(node) ? selection : [node];
     return nodes.filter((candidate) => candidate?.type === 'branch');
 }
 
 /**
+ * @template {BranchTarget} T
+ * @param {T} target
+ * @returns {target is T & LocalTarget}
+ */
+function isLocalTarget(target) {
+    return target.branch.kind === 'local';
+}
+
+/**
+ * @template {BranchTarget} T
+ * @param {T} target
+ * @returns {target is T & RemoteTarget}
+ */
+function isRemoteTarget(target) {
+    return target.branch.kind === 'remote';
+}
+
+/**
  * A local branch is paired with its upstream, a remote branch with every local branch that tracks it;
  * a branch without a counterpart forms a pair alone. Halves are shared objects, one per ref.
+ *
+ * @param {BranchNode[]} nodes
+ * @returns {BranchPair[]}
  */
 function localAndRemotePairs(nodes) {
+    /** @type {Map<string, BranchTarget>} by repository and refname */
     const halves = new Map();
+    /**
+     * @template {Branch} B
+     * @param {RepositoryModel} model
+     * @param {B | undefined} branch
+     * @returns {{model: RepositoryModel, branch: B} | undefined}
+     */
     const halfOf = (model, branch) => {
         if (branch === undefined) {
             return undefined;
@@ -654,9 +897,11 @@ function localAndRemotePairs(nodes) {
         if (!halves.has(key)) {
             halves.set(key, { model, branch });
         }
-        return halves.get(key);
+        return /** @type {{model: RepositoryModel, branch: B}} */ (halves.get(key));
     };
+    /** @type {Map<string, BranchPair>} */
     const pairs = new Map();
+    /** @type {(model: RepositoryModel, local: LocalBranch | undefined, remote: RemoteBranch | undefined) => void} */
     const addPair = (model, local, remote) => {
         const key = [model.rootPath, local?.refname ?? '', remote?.refname ?? ''].join('\0');
         if (!pairs.has(key)) {
@@ -681,6 +926,11 @@ function localAndRemotePairs(nodes) {
     return [...pairs.values()];
 }
 
+/**
+ * @param {RepositoryModel} model
+ * @param {LocalBranch} local
+ * @returns {RemoteBranch | undefined}
+ */
 function upstreamBranchOf(model, local) {
     if (local.upstreamRemote === undefined || local.isUpstreamGone) {
         return undefined;
@@ -688,10 +938,18 @@ function upstreamBranchOf(model, local) {
     return model.remotes.get(local.upstreamRemote)?.find((remote) => remote.name === local.upstreamBranch);
 }
 
+/**
+ * @param {BranchPair[]} pairs
+ * @returns {Array<LocalTarget | RemoteTarget>}
+ */
 function halvesOf(pairs) {
     return [...new Set(pairs.flatMap((pair) => [pair.local, pair.remote]))].filter((half) => half !== undefined);
 }
 
+/**
+ * @param {BranchTarget[]} mainBranches
+ * @returns {string[]}
+ */
 function mainBranchNotes(mainBranches) {
     if (mainBranches.length === 0) {
         return [];
@@ -700,10 +958,21 @@ function mainBranchNotes(mainBranches) {
     return [`Not deleted, the main branch is never deleted: ${names}.`];
 }
 
+/**
+ * @param {unknown} error
+ * @returns {boolean}
+ */
 function isNotFullyMerged(error) {
-    return error?.gitErrorCode === BRANCH_NOT_FULLY_MERGED || /not fully merged/.test(describeGitError(error));
+    const code = typeof error === 'object' && error !== null && 'gitErrorCode' in error
+        ? error.gitErrorCode
+        : undefined;
+    return code === BRANCH_NOT_FULLY_MERGED || /not fully merged/.test(describeGitError(error));
 }
 
+/**
+ * @param {BranchTarget[]} nodes
+ * @returns {string} at most ten names, a line each
+ */
 function listBranches(nodes) {
     const isSeveralRepositories = new Set(nodes.map((node) => node.model)).size > 1;
     const lines = nodes.slice(0, LISTED_BRANCHES_LIMIT).map((node) => {
@@ -716,4 +985,4 @@ function listBranches(nodes) {
     return lines.join('\n');
 }
 
-module.exports = { BranchCommands };
+module.exports.BranchCommands = BranchCommands;

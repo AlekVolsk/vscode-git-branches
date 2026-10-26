@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const { shortenRefName } = require('./branchRefs');
@@ -7,6 +8,39 @@ const FRONTMATTER_FIELD = /^([A-Za-z][\w-]*):[ \t]*(.*)$/;
 const BLOCK_SCALAR_MARKERS = new Set(['>', '|', '>-', '|-', '>+', '|+']);
 const PLACEHOLDER = /\$\{(\w+)\}/g;
 
+/**
+ * @typedef {import('./branchRefs').Branch} Branch
+ */
+
+/**
+ * @typedef {object} SkillFrontmatter
+ * @property {string | undefined} name
+ * @property {string} description empty for none or a block scalar
+ * @property {boolean} isUserInvocable
+ */
+
+/**
+ * @typedef {object} PlaceholderRepository
+ * @property {Branch | undefined} base
+ * @property {string} rootPath
+ * @property {string} name
+ */
+
+/**
+ * @typedef {object} PlaceholderValues
+ * @property {string} branch
+ * @property {string} ref
+ * @property {string} remote
+ * @property {string} upstream
+ * @property {string} base
+ * @property {string} repoPath
+ * @property {string} repoName
+ */
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
 function unquote(value) {
     const isQuoted = value.length >= 2
         && (value.startsWith('"') || value.startsWith('\''))
@@ -14,11 +48,16 @@ function unquote(value) {
     return isQuoted ? value.slice(1, -1) : value;
 }
 
+/**
+ * @param {string} text contents of `SKILL.md`
+ * @returns {SkillFrontmatter | undefined} `undefined` without frontmatter
+ */
 function parseSkillFrontmatter(text) {
     const frontmatter = FRONTMATTER.exec(text);
     if (frontmatter === null) {
         return undefined;
     }
+    /** @type {Map<string, string>} */
     const fields = new Map();
     for (const line of frontmatter[1].split(/\r?\n/)) {
         const field = FRONTMATTER_FIELD.exec(line);
@@ -34,6 +73,11 @@ function parseSkillFrontmatter(text) {
     };
 }
 
+/**
+ * @param {PlaceholderRepository} model
+ * @param {Branch} branch
+ * @returns {PlaceholderValues}
+ */
 function placeholderValuesFor(model, branch) {
     const isRemote = branch.kind === 'remote';
     return {
@@ -47,10 +91,17 @@ function placeholderValuesFor(model, branch) {
     };
 }
 
+/**
+ * @param {string} template
+ * @param {Readonly<Record<string, string>>} values
+ * @returns {string} the template with every known `${key}` replaced; unknown ones stay
+ */
 function substitutePlaceholders(template, values) {
     return template.replace(PLACEHOLDER, (placeholder, key) => {
         return Object.hasOwn(values, key) ? values[key] : placeholder;
     });
 }
 
-module.exports = { parseSkillFrontmatter, placeholderValuesFor, substitutePlaceholders };
+module.exports.parseSkillFrontmatter = parseSkillFrontmatter;
+module.exports.placeholderValuesFor = placeholderValuesFor;
+module.exports.substitutePlaceholders = substitutePlaceholders;

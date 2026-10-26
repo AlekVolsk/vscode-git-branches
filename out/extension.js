@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 Object.defineProperty(exports, '__esModule', { value: true });
 exports.activate = activate;
@@ -11,13 +12,41 @@ const { BranchFilterPrompt } = require('./branchFilterPrompt');
 const { BranchTreeProvider } = require('./branchTreeProvider');
 const { SkillLauncher } = require('./skillLauncher');
 
+/**
+ * @typedef {import('./repositoryModel').GitRepository} GitRepository
+ */
+
+/**
+ * The part of API version 1 of the Git extension (`vscode.git`) that is used here.
+ *
+ * @typedef {object} GitApi
+ * @property {{readonly path: string}} git
+ * @property {readonly GitRepository[]} repositories
+ * @property {vscode.Event<GitRepository>} onDidOpenRepository
+ * @property {vscode.Event<GitRepository>} onDidCloseRepository
+ */
+
+/**
+ * The exports of the Git extension.
+ *
+ * @typedef {object} GitExtension
+ * @property {boolean} enabled
+ * @property {vscode.Event<boolean>} onDidChangeEnablement
+ * @property {(version: 1) => GitApi} getAPI
+ */
+
 const VIEW_ID = 'gitBranches.view';
 const SETTINGS_AFFECTING_TREE = Object.freeze(['gitBranches.baseBranch', 'git.branchSortOrder']);
 
+/**
+ * @param {vscode.ExtensionContext} context
+ * @returns {Promise<void>}
+ */
 async function activate(context) {
     const log = vscode.window.createOutputChannel('Git Branches', { log: true });
     context.subscriptions.push(log);
 
+    /** @type {vscode.Extension<GitExtension> | undefined} */
     const gitExtension = vscode.extensions.getExtension('vscode.git');
     if (gitExtension === undefined) {
         log.error('The built-in Git extension is not available.');
@@ -40,6 +69,12 @@ async function activate(context) {
     context.subscriptions.push(enablement);
 }
 
+/**
+ * @param {vscode.ExtensionContext} context
+ * @param {GitApi} gitApi
+ * @param {vscode.LogOutputChannel} log
+ * @returns {void}
+ */
 function start(context, gitApi, log) {
     const ages = new BranchAgeService(gitApi.git.path, log);
     const tree = new BranchTreeProvider(gitApi.git.path, ages, log);
@@ -81,4 +116,7 @@ function start(context, gitApi, log) {
     );
 }
 
+/**
+ * @returns {void}
+ */
 function deactivate() {}
