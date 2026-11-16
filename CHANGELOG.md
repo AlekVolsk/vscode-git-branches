@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.0 — 2026-11-16
+
+### Added
+
+- **Copy branch list** on Local and remote groups: copies visible branch names, one per line, without remote prefixes. Both text and status filters are respected.
+- **Status filtering** from the filter row context menu: In progress, New, Merged, Stale and History warnings. One status can be combined with the text search; selecting it again removes the status condition. The row displays both active conditions.
+- **Independent filter clearing**: Clear text filter and Clear status filter appear for their active conditions; Clear all filters appears when both are active. The inline × resets both conditions, including an open text input.
+- **Group statistics** in Local and remote tooltips: branch count, in progress, new, merged, stale, history warnings and pending calculations. Filtered totals are marked `(filtered)`. Staleness is counted independently of other statuses, so category totals can exceed the branch count. The repository tooltip shows only its path.
+- **`gitBranches.staleAfterDays`**: a positive integer threshold in 24-hour days, defaulting to 180. Changes apply immediately.
+- **History warnings** for unknown branch ages and branch points predating the default branch history, with an explanation in the tooltip. Pending calculations are not warnings.
+
+### Changed
+
+- **Branch age and fork point** use the estimated first-parent branch point and its committer date. Incoming merges from the base do not move the original first-parent intersection forward. For unrelated histories, incoming merge parents provide a heuristic fallback; an unrecoverable branch point remains unknown.
+- **The default branch** is identified independently of the comparison base. Its age uses the oldest commit on its first-parent history, with the history start date shown in the tooltip. Both local and remote entries use the local-branch color and are exempt from staleness.
+- **Branch statuses** distinguish `same as base`, `no own commits`, `up to date with base` and `merged`. Equal tips count as new without an unknown-age warning. Fast-forward ambiguity is not presented as proof of a merge.
+- **Branch colors**: new branches use teal (`#448C83` in dark themes, `#337069` in light themes), merged branches use yellow, and history warnings use coral red with priority over other colors. The new `gitBranches.newBranchForeground` and `gitBranches.invalidBranchForeground` tokens join the existing palette under `workbench.colorCustomizations`; all tokens are documented in the README.
+- **The active local branch and its tracked remote** share the current-branch color, unless a history warning takes priority.
+
+### Fixed
+
+- Active branch labels no longer use a full-name highlight that can introduce a background color.
+- Fetch actions explicitly refresh the branch tree after completion instead of relying only on Git extension events.
+
 ## 1.2.1 — 2026-10-26
 
 - License changed from MIT to BSD 3-Clause.

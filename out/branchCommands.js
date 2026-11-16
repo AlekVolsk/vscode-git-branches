@@ -654,6 +654,7 @@ class BranchCommands {
                     `${isPruning ? 'Fetch and prune' : 'Fetch'} ${model.name}`,
                     () => model.repository.fetch(isPruning ? { all: true, prune: true } : { all: true }),
                 );
+                await this.#tree.refreshRepository(model);
             } catch (error) {
                 failures.push({ model, error });
             }

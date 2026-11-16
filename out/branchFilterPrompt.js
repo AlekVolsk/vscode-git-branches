@@ -60,6 +60,16 @@ class BranchFilterPrompt {
         inputBox.show();
     }
 
+    /** @returns {void} */
+    clearText() {
+        clearTimeout(this.#applyTimer);
+        this.#applyTimer = undefined;
+        if (this.#inputBox !== undefined) {
+            this.#inputBox.value = '';
+        }
+        this.#tree.setFilter('');
+    }
+
     /**
      * @returns {void}
      */

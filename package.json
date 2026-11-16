@@ -2,7 +2,7 @@
     "name": "git-branches",
     "displayName": "Git Branches",
     "description": "Local and remote branches of every open repository, in the Source Control panel.",
-    "version": "1.2.1",
+    "version": "1.3.0",
     "publisher": "AlekVolsk",
     "author": "AlekVolsk",
     "license": "BSD-3-Clause",
@@ -72,13 +72,13 @@
             },
             {
                 "command": "gitBranches.editFilter",
-                "title": "Filter branches…",
+                "title": "Filter branches\u2026",
                 "category": "Git Branches",
                 "icon": "$(search)"
             },
             {
                 "command": "gitBranches.clearFilter",
-                "title": "Clear filter",
+                "title": "Clear all filters",
                 "category": "Git Branches",
                 "icon": "$(close)"
             },
@@ -94,7 +94,7 @@
             },
             {
                 "command": "gitBranches.createBranchFrom",
-                "title": "New branch from…",
+                "title": "New branch from\u2026",
                 "category": "Git Branches",
                 "icon": "$(git-branch-create)"
             },
@@ -112,13 +112,13 @@
             },
             {
                 "command": "gitBranches.rename",
-                "title": "Rename…",
+                "title": "Rename\u2026",
                 "category": "Git Branches",
                 "icon": "$(edit)"
             },
             {
                 "command": "gitBranches.runSkill",
-                "title": "Run skill…",
+                "title": "Run skill\u2026",
                 "category": "Git Branches",
                 "icon": "$(sparkle)"
             },
@@ -145,6 +145,39 @@
                 "title": "Copy name to clipboard",
                 "category": "Git Branches",
                 "icon": "$(copy)"
+            },
+            {
+                "command": "gitBranches.copyGroupList",
+                "title": "Copy branch list",
+                "icon": "$(copy)"
+            },
+            {
+                "command": "gitBranches.filter.working",
+                "title": "In progress"
+            },
+            {
+                "command": "gitBranches.filter.new",
+                "title": "New"
+            },
+            {
+                "command": "gitBranches.filter.merged",
+                "title": "Merged"
+            },
+            {
+                "command": "gitBranches.filter.stale",
+                "title": "Stale"
+            },
+            {
+                "command": "gitBranches.filter.invalid",
+                "title": "History warnings"
+            },
+            {
+                "command": "gitBranches.clearTextFilter",
+                "title": "Clear text filter"
+            },
+            {
+                "command": "gitBranches.clearStatusFilter",
+                "title": "Clear status filter"
             }
         ],
         "menus": {
@@ -178,8 +211,8 @@
                 },
                 {
                     "command": "gitBranches.clearFilter",
-                    "when": "view == gitBranches.view && viewItem == filter.active",
-                    "group": "1_filter@2"
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/ && gitBranches.hasTextFilter && gitBranches.hasStatusFilter",
+                    "group": "filterClear@3"
                 },
                 {
                     "command": "gitBranches.fetchAll",
@@ -260,6 +293,46 @@
                     "command": "gitBranches.deleteLocalAndRemote",
                     "when": "view == gitBranches.view && viewItem =~ /^branch\\.(local|remote)$/",
                     "group": "9_delete@3"
+                },
+                {
+                    "command": "gitBranches.copyGroupList",
+                    "when": "view == gitBranches.view && (viewItem == localGroup || viewItem == remoteGroup)",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "gitBranches.filter.working",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "branchTypes"
+                },
+                {
+                    "command": "gitBranches.filter.new",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "branchTypes"
+                },
+                {
+                    "command": "gitBranches.filter.merged",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "branchTypes"
+                },
+                {
+                    "command": "gitBranches.filter.stale",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "branchTypes"
+                },
+                {
+                    "command": "gitBranches.filter.invalid",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/",
+                    "group": "branchTypes"
+                },
+                {
+                    "command": "gitBranches.clearTextFilter",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/ && gitBranches.hasTextFilter",
+                    "group": "filterClear@1"
+                },
+                {
+                    "command": "gitBranches.clearStatusFilter",
+                    "when": "view == gitBranches.view && viewItem =~ /^filter/ && gitBranches.hasStatusFilter",
+                    "group": "filterClear@2"
                 }
             ],
             "commandPalette": [
@@ -345,13 +418,20 @@
                             }
                         }
                     },
-                    "markdownDescription": "Prompts offered by **Run skill…** above the skills found in `<repository>/.claude/skills` and `~/.claude/skills`. Substituted in `prompt`: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`."
+                    "markdownDescription": "Prompts offered by **Run skill\u2026** above the skills found in `<repository>/.claude/skills` and `~/.claude/skills`. Substituted in `prompt`: `${branch}`, `${ref}`, `${remote}`, `${upstream}`, `${base}`, `${repoPath}`, `${repoName}`."
                 },
                 "gitBranches.baseBranch": {
                     "type": "string",
                     "default": "",
                     "scope": "resource",
                     "markdownDescription": "Branch that ages and fork points are measured against, e.g. `origin/master` or `develop`. Empty: the `HEAD` of `origin`, then of any other remote, then `master`, then `main`."
+                },
+                "gitBranches.staleAfterDays": {
+                    "type": "integer",
+                    "default": 180,
+                    "minimum": 1,
+                    "description": "Mark non-default branches as stale after this many days from their estimated branch point.",
+                    "scope": "resource"
                 }
             }
         },
@@ -390,20 +470,40 @@
                 "id": "gitBranches.mergedBranchForeground",
                 "description": "Label and icon color of branches already merged into the base branch in the Branches view.",
                 "defaults": {
-                    "dark": "#D0607A",
-                    "light": "#8E1B3B",
-                    "highContrast": "#FF7A93",
-                    "highContrastLight": "#8E1B3B"
+                    "dark": "#E5C07B",
+                    "light": "#8A6500",
+                    "highContrast": "#FFE066",
+                    "highContrastLight": "#8A6500"
                 }
             },
             {
                 "id": "gitBranches.staleBranchForeground",
-                "description": "Label and icon color of branches older than six months in the Branches view.",
+                "description": "Label and icon color of non-default branches older than gitBranches.staleAfterDays in the Branches view.",
                 "defaults": {
                     "dark": "disabledForeground",
                     "light": "disabledForeground",
                     "highContrast": "disabledForeground",
                     "highContrastLight": "disabledForeground"
+                }
+            },
+            {
+                "id": "gitBranches.newBranchForeground",
+                "description": "Label and icon color of non-default branches with no commits outside the base and no graph evidence of a merge.",
+                "defaults": {
+                    "dark": "#448C83",
+                    "light": "#337069",
+                    "highContrast": "#448C83",
+                    "highContrastLight": "#337069"
+                }
+            },
+            {
+                "id": "gitBranches.invalidBranchForeground",
+                "description": "Branches whose age is unknown or whose branch point predates the default branch history.",
+                "defaults": {
+                    "dark": "#D0607A",
+                    "light": "#8E1B3B",
+                    "highContrast": "#FF7A93",
+                    "highContrastLight": "#8E1B3B"
                 }
             }
         ]

@@ -2,6 +2,7 @@
 'use strict';
 
 const vscode = require('vscode');
+const { statisticsCategory, isStaleBranch } = require('./branchStatistics');
 const { BranchDecorationProvider } = require('./branchDecorationProvider');
 const { createNameMatcher, parseFilterWords } = require('./branchFilter');
 const { describeGitError } = require('./gitCli');
@@ -10,7 +11,6 @@ const {
     describeUpstream,
     formatAge,
     formatDate,
-    isOlderThanMonths,
     shortSha,
     shortenRefName,
 } = require('./branchRefs');
@@ -49,15 +49,21 @@ const {
 const REFRESH_DELAY_MS = 400;
 const AGE_REDRAW_DELAY_MS = 100;
 const PENDING_AGE_TEXT = '…';
-const MERGED_TEXT = 'merged';
+const STATUS_TEXT = {
+    same: 'same as base',
+    empty: 'no own commits',
+    merged: 'merged',
+    synced: 'up to date with base',
+    diverged: '',
+};
 /** @type {Readonly<Partial<Record<AgeSource, string>>>} */
 const AGE_SOURCE_TEXT = Object.freeze({
     firstCommit: 'first own commit',
-    branchLine: 'first commit of the branch line',
+    branchLine: 'estimated branch point',
+    historyRoot: 'first commit of the default branch history',
     reflog: 'branch created, from reflog',
     tip: 'its last commit; the branch has no line of its own',
 });
-const STALE_AFTER_MONTHS = 6;
 const PRIMARY_REMOTE = 'origin';
 const OPEN_BRANCH_COMMAND = 'gitBranches.openBranch';
 const EDIT_FILTER_COMMAND = 'gitBranches.editFilter';
@@ -206,6 +212,40 @@ class BranchTreeProvider {
         return this.#refreshModel(model);
     }
 
+    /** @type {'working' | 'new' | 'merged' | 'stale' | 'invalid' | undefined} */
+    typeFilter = undefined;
+
+    /**
+     * @param {'working' | 'new' | 'merged' | 'stale' | 'invalid' | undefined} type
+     * @returns {void}
+     */
+    setTypeFilter(type) {
+        this.typeFilter = this.typeFilter === type ? undefined : type;
+        void vscode.commands.executeCommand('setContext', 'gitBranches.hasStatusFilter',
+            this.typeFilter !== undefined);
+        this.#filterGeneration += 1;
+        this.#onDidChangeTreeData.fire(undefined);
+    }
+
+    /** @returns {void} */
+    clearFilters() {
+        this.typeFilter = undefined;
+        void vscode.commands.executeCommand('setContext', 'gitBranches.hasStatusFilter', false);
+        this.setFilter('');
+        this.#onDidChangeTreeData.fire(undefined);
+    }
+
+    /**
+     * @param {GroupNode} node
+     * @returns {Promise<void>}
+     */
+    async copyGroupList(node) {
+        if (node?.type !== 'localGroup' && node?.type !== 'remoteGroup') {
+            return;
+        }
+        await vscode.env.clipboard.writeText(this.#shownBranchesOf(node).map((branch) => branch.name).join('\n'));
+    }
+
     /**
      * @returns {string} the filter words joined by single spaces
      */
@@ -218,10 +258,10 @@ class BranchTreeProvider {
      */
     get filterSummaryText() {
         const branches = this.models.flatMap((model) => model.branches);
-        if (this.#matchName === undefined) {
+        if ((this.#matchName === undefined && this.typeFilter === undefined)) {
             return `${branches.length} branches`;
         }
-        const matchedCount = branches.filter((branch) => this.#matchName?.(branch.name) !== undefined).length;
+        const matchedCount = branches.filter((branch) => this.#isShown(branch)).length;
         return matchedCount === 0 ? 'no matches' : `${matchedCount} of ${branches.length}`;
     }
 
@@ -238,6 +278,7 @@ class BranchTreeProvider {
             return;
         }
         this.#filterWords = words;
+        void vscode.commands.executeCommand('setContext', 'gitBranches.hasTextFilter', words.length > 0);
         this.#matchName = createNameMatcher(words);
         this.#filterGeneration += 1;
         for (const [id, node] of this.#nodes) {
@@ -370,7 +411,7 @@ class BranchTreeProvider {
         }
         this.#ages.retain(model);
         this.#pruneNodes(model);
-        if (this.#models.size === 1 || this.#matchName !== undefined) {
+        if (this.#models.size === 1 || (this.#matchName !== undefined || this.typeFilter !== undefined)) {
             this.#onDidChangeTreeData.fire(undefined);
             return;
         }
@@ -420,7 +461,7 @@ class BranchTreeProvider {
      * @returns {F & {id: string}}
      */
     #scopedNode(id, fields) {
-        if (this.#matchName === undefined) {
+        if ((this.#matchName === undefined && this.typeFilter === undefined)) {
             return this.#node(id, fields);
         }
         return this.#node(`${id}|filter:${this.#filterGeneration}`, { ...fields, isFiltered: true });
@@ -484,7 +525,7 @@ class BranchTreeProvider {
      * @returns {boolean}
      */
     #hasShownBranches(branches) {
-        return this.#matchName === undefined || branches.some((branch) => this.#isShown(branch));
+        return (this.#matchName === undefined && this.typeFilter === undefined) || branches.some((branch) => this.#isShown(branch));
     }
 
     /**
@@ -492,7 +533,24 @@ class BranchTreeProvider {
      * @returns {boolean}
      */
     #isShown(branch) {
-        return this.#matchName === undefined || this.#matchName(branch.name) !== undefined;
+        if (this.#matchName !== undefined && this.#matchName(branch.name) === undefined) {
+            return false;
+        }
+        if (this.typeFilter === undefined) {
+            return true;
+        }
+        const model = this.models.find((candidate) => candidate.branches.includes(branch));
+        if (model === undefined) {
+            return false;
+        }
+        const configured = vscode.workspace.getConfiguration('gitBranches', model.repository.rootUri)
+            .get('staleAfterDays', 180);
+        const days = Number.isInteger(configured) && configured >= 1 ? configured : 180;
+        const age = this.#ageOf(model, branch);
+        if (this.typeFilter === 'stale') {
+            return isStaleBranch(model.isMainBranch(branch), age, nowSeconds(), days);
+        }
+        return statisticsCategory(model.isMainBranch(branch), age, nowSeconds(), days) === this.typeFilter;
     }
 
     /**
@@ -500,12 +558,16 @@ class BranchTreeProvider {
      * @returns {vscode.TreeItem}
      */
     #filterItem(node) {
-        const isFiltering = this.#matchName !== undefined;
-        const item = new vscode.TreeItem(this.filterText, vscode.TreeItemCollapsibleState.None);
+        const isFiltering = (this.#matchName !== undefined || this.typeFilter !== undefined);
+        const labels = { working: 'In progress', new: 'New', merged: 'Merged',
+            stale: 'Stale', invalid: 'History warnings' };
+        const typeLabel = this.typeFilter === undefined ? '' : labels[this.typeFilter];
+        const label = [this.filterText, typeLabel].filter(Boolean).join(' · ');
+        const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
         item.id = node.id;
         item.description = isFiltering ? this.filterSummaryText : FILTER_PLACEHOLDER;
         item.tooltip = isFiltering
-            ? 'Branches whose names contain every word. Click to change.'
+            ? 'Text and status filters apply together. Click to edit text; right-click to select a status or clear filters.'
             : 'Click to filter the branches by name.';
         item.iconPath = new vscode.ThemeIcon(isFiltering ? 'filter-filled' : 'search');
         item.contextValue = isFiltering ? 'filter.active' : 'filter';
@@ -543,12 +605,54 @@ class BranchTreeProvider {
         const item = new vscode.TreeItem(label, state);
         item.id = node.id;
         item.description = isFiltered ? `${this.#shownBranchesOf(node).length} / ${branchCount}` : String(branchCount);
-        item.tooltip = node.type === 'localGroup'
-            ? `${branchCount} local branches`
-            : `${branchCount} branches on ${node.remoteName}`;
+        item.tooltip = this.#statisticsTooltip(node.model, this.#shownBranchesOf(node), label);
         item.iconPath = new vscode.ThemeIcon(icon);
         item.contextValue = node.type;
         return item;
+    }
+
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch[]} branches
+     * @param {string} title
+     * @returns {vscode.MarkdownString}
+     */
+    #statisticsTooltip(model, branches, title) {
+        const configured = vscode.workspace.getConfiguration('gitBranches', model.repository.rootUri)
+            .get('staleAfterDays', 180);
+        const days = Number.isInteger(configured) && configured >= 1 ? configured : 180;
+        const counts = { working: 0, new: 0, merged: 0, stale: 0, invalid: 0, pending: 0 };
+        const now = nowSeconds();
+        for (const branch of branches) {
+            const age = this.#ageOf(model, branch);
+            const isDefault = model.isMainBranch(branch);
+            const category = statisticsCategory(isDefault, age, now, days);
+            if (category !== 'stale') {
+                counts[category] += 1;
+            }
+            if (isStaleBranch(isDefault, age, now, days)) {
+                counts.stale += 1;
+            }
+        }
+        const tooltip = new vscode.MarkdownString();
+        tooltip.appendText(title);
+        tooltip.appendMarkdown('\n\n');
+        const lines = [
+            `Branches: ${branches.length}${(this.#matchName === undefined && this.typeFilter === undefined) ? '' : ' (filtered)'}`,
+            `In progress: ${counts.working}`,
+            `New: ${counts.new}`,
+            `Merged: ${counts.merged}`,
+            `Stale (${days}+ days): ${counts.stale}`,
+            `History warnings: ${counts.invalid}`,
+        ];
+        if (counts.pending > 0) {
+            lines.push(`Calculating: ${counts.pending}`);
+        }
+        for (const line of lines) {
+            tooltip.appendText(line);
+            tooltip.appendMarkdown('  \n');
+        }
+        return tooltip;
     }
 
     /**
@@ -558,7 +662,7 @@ class BranchTreeProvider {
     #branchItem(node) {
         const { model, branch } = node;
         const age = this.#ageOf(model, branch);
-        const kind = branchKindOf(branch, age);
+        const kind = branchKindOf(branch, age, model);
         const item = new vscode.TreeItem(this.#branchLabel(branch, kind), vscode.TreeItemCollapsibleState.None);
         item.id = node.id;
         item.description = branchDescriptionOf(branch, age);
@@ -571,17 +675,11 @@ class BranchTreeProvider {
     }
 
     /**
-     * The current branch is bold through a highlight over the whole label, so filter matches
-     * are highlighted only in the other branches.
-     *
      * @param {Branch} branch
      * @param {BranchColorKind} kind
      * @returns {string | vscode.TreeItemLabel}
      */
     #branchLabel(branch, kind) {
-        if (kind === 'current') {
-            return { label: branch.name, highlights: [[0, branch.name.length]] };
-        }
         const highlights = this.#matchName?.(branch.name);
         return highlights === undefined ? branch.name : { label: branch.name, highlights };
     }
@@ -589,10 +687,10 @@ class BranchTreeProvider {
     /**
      * @param {RepositoryModel} model
      * @param {Branch} branch
-     * @returns {Readonly<BranchAge> | undefined} `undefined` without a base and for the base itself
+     * @returns {Readonly<BranchAge> | undefined} Default branch history does not require a comparison base.
      */
     #ageOf(model, branch) {
-        if (model.base === undefined || model.isBaseLike(branch)) {
+        if (!model.isMainBranch(branch) && model.base === undefined) {
             return undefined;
         }
         return this.#ages.ageOf(model, branch);
@@ -631,6 +729,14 @@ class BranchTreeProvider {
         appendLine('Committed', `${formatDate(branch.committerDate)} by ${branch.author}`);
         tooltip.appendMarkdown('\n');
 
+        if (model.isMainBranch(branch)) {
+            const age = this.#ages.ageOf(model, branch);
+            appendLine('Age', ageInFull(age, branch, branch.name));
+            if (age.since !== undefined) {
+                appendLine('History starts', formatDate(age.since));
+            }
+            return tooltip;
+        }
         if (model.base === undefined) {
             const reason = model.configuredBase === ''
                 ? 'not resolved — set gitBranches.baseBranch'
@@ -639,13 +745,22 @@ class BranchTreeProvider {
             return tooltip;
         }
         appendLine('Base', shortenRefName(model.base.refname));
-        if (model.isBaseLike(branch)) {
-            return tooltip;
-        }
+
         appendLine('Fork point', await this.#forkPointText(model, branch));
         const baseName = shortenRefName(model.base.refname);
         const age = this.#ages.ageOf(model, branch);
         appendLine('Age', ageInFull(age, branch, baseName));
+        if (age.state === 'resolved' && age.since === undefined && age.status !== 'same') {
+            appendLine('History warning', 'branch point unknown');
+        } else if (age.predatesDefault === true) {
+            appendLine('History warning', 'branch predates default branch history');
+        }
+        if (age.status === 'same' && age.since === undefined) {
+            appendLine('Branch point', 'not distinguishable while the branch and base tips are identical');
+        }
+        if (age.status !== undefined && STATUS_TEXT[age.status] !== '') {
+            appendLine('Status', STATUS_TEXT[age.status]);
+        }
         if (age.isMerged) {
             appendLine('Merged', `its tip is already in ${baseName}`);
         }
@@ -678,6 +793,12 @@ class BranchTreeProvider {
             return;
         }
         this.#ageRedrawNodes.add(node);
+        for (const candidate of this.#nodes.values()) {
+            if ((candidate.type === 'repository' || candidate.type === 'localGroup'
+                || candidate.type === 'remoteGroup') && candidate.model.rootPath === rootPath) {
+                this.#ageRedrawNodes.add(candidate);
+            }
+        }
         if (this.#ageRedrawTimer !== undefined) {
             return;
         }
@@ -685,7 +806,7 @@ class BranchTreeProvider {
             this.#ageRedrawTimer = undefined;
             const nodes = [...this.#ageRedrawNodes];
             this.#ageRedrawNodes.clear();
-            this.#onDidChangeTreeData.fire(nodes);
+            this.#onDidChangeTreeData.fire(this.typeFilter === undefined ? nodes : undefined);
         }, AGE_REDRAW_DELAY_MS);
     }
 }
@@ -693,16 +814,33 @@ class BranchTreeProvider {
 /**
  * @param {Branch} branch
  * @param {Readonly<BranchAge> | undefined} age
+ * @param {RepositoryModel} model
  * @returns {BranchColorKind}
  */
-function branchKindOf(branch, age) {
-    if (branch.kind === 'local' && branch.isHead) {
+function branchKindOf(branch, age, model) {
+    if (!model.isMainBranch(branch) && age?.state === 'resolved'
+        && ((age.since === undefined && age.status !== 'same') || age.predatesDefault === true)) {
+        return 'invalid';
+    }
+    const activeRemote = branch.kind === 'remote' && model.branches.some((local) =>
+        local.kind === 'local' && local.isHead && local.upstreamRemote === branch.remoteName
+        && local.upstreamBranch === branch.name);
+    if ((branch.kind === 'local' && branch.isHead) || activeRemote) {
         return 'current';
+    }
+    if (model.isMainBranch(branch)) {
+        return 'local';
+    }
+    if (age?.status === 'empty' || age?.status === 'same') {
+        return 'new';
     }
     if (age?.isMerged === true) {
         return 'merged';
     }
-    if (age?.since !== undefined && isOlderThanMonths(age.since, nowSeconds(), STALE_AFTER_MONTHS)) {
+    const configuredDays = vscode.workspace.getConfiguration('gitBranches', model.repository.rootUri)
+        .get('staleAfterDays', 180);
+    const days = Number.isInteger(configuredDays) && configuredDays >= 1 ? configuredDays : 180;
+    if (age?.since !== undefined && nowSeconds() - age.since >= days * 86_400) {
         return 'stale';
     }
     return branch.kind;
@@ -728,7 +866,7 @@ function ageTextOf(age) {
  * @returns {string}
  */
 function branchDescriptionOf(branch, age) {
-    const parts = [ageTextOf(age), age?.isMerged === true ? MERGED_TEXT : ''];
+    const parts = [ageTextOf(age), age?.status === undefined ? '' : STATUS_TEXT[age.status]];
     if (branch.kind === 'local') {
         parts.push(describeUpstream(branch));
     }

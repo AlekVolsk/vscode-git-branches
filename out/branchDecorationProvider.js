@@ -6,11 +6,13 @@ const vscode = require('vscode');
 const BRANCH_URI_SCHEME = 'git-branches';
 
 /**
- * @typedef {'local' | 'remote' | 'current' | 'stale' | 'merged'} BranchColorKind
+ * @typedef {'local' | 'remote' | 'current' | 'stale' | 'merged' | 'new' | 'invalid'} BranchColorKind
  */
 
 /** @type {ReadonlyMap<string, string>} color id by {@link BranchColorKind}, looked up by URI authority */
 const COLOR_ID_BY_KIND = new Map([
+    ['invalid', 'gitBranches.invalidBranchForeground'],
+    ['new', 'gitBranches.newBranchForeground'],
     ['local', 'gitBranches.localBranchForeground'],
     ['remote', 'gitBranches.remoteBranchForeground'],
     ['current', 'gitBranches.currentBranchForeground'],

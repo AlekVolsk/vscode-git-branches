@@ -3,12 +3,9 @@
 
 const vscode = require('vscode');
 const { describeGitError, execGit } = require('./gitCli');
+const { classifyBranch } = require('./branchStatus');
+const { findBranchPoint } = require('./branchPoint');
 const {
-    BRANCH_LINE_FORMAT,
-    REFLOG_FORMAT,
-    parseBranchLine,
-    parseOldestTimestamp,
-    parseReflogCreation,
     shortSha,
 } = require('./branchRefs');
 
@@ -20,7 +17,7 @@ const {
 /**
  * Where an age comes from: `none` — no commits and no reflog entry, `error` — reading the history failed.
  *
- * @typedef {'none' | 'error' | 'firstCommit' | 'branchLine' | 'reflog' | 'tip'} AgeSource
+ * @typedef {'none' | 'error' | 'firstCommit' | 'branchLine' | 'reflog' | 'tip' | 'historyRoot'} AgeSource
  */
 
 /**
@@ -28,7 +25,9 @@ const {
  * @property {'pending' | 'resolved'} state
  * @property {number | undefined} since unix seconds
  * @property {AgeSource} source
+ * @property {boolean} [predatesDefault]
  * @property {boolean} isMerged
+ * @property {'same' | 'empty' | 'merged' | 'synced' | 'diverged'} [status]
  */
 
 /**
@@ -57,17 +56,13 @@ const {
  */
 
 const MAX_PARALLEL_GIT = 4;
-const BRANCH_LINE_LIMIT = 1_000;
 /** @type {Readonly<BranchAge>} */
 const AGE_PENDING = Object.freeze({ state: 'pending', since: undefined, source: 'none', isMerged: false });
 /** @type {Readonly<BranchAge>} */
 const AGE_FAILED = Object.freeze({ state: 'resolved', since: undefined, source: 'error', isMerged: false });
 
 /**
- * Branch age. A branch with commits that are not in the base: author date of the oldest of them.
- * A branch whose tip is already in the base (merged): author date of the first commit of its own
- * first-parent line, then the reflog creation entry, then the date of its tip.
- * A branch pointing at the tip of the base has no commits yet: only the reflog creation entry.
+ * Возраст от исходной точки first-parent-ответвления, без сдвига при подливании базы.
  */
 class BranchAgeService {
     /** @type {string} */
@@ -130,10 +125,11 @@ class BranchAgeService {
         if (model.base === undefined) {
             throw new Error('The base branch is not resolved.');
         }
-        const mergeBaseArgs = ['merge-base', model.base.sha, branch.sha];
-        const mergeBase = (await execGit(this.#gitPath, model.rootPath, mergeBaseArgs)).trim();
-        const details = await execGit(this.#gitPath, model.rootPath, ['log', '-1', '--format=%ct', mergeBase, '--']);
-        return { sha: shortSha(mergeBase), date: Number(details.trim()) };
+        const point = await this.#readBranchPoint(model, branch);
+        if (point === undefined) {
+            throw new Error('Исходная точка ответвления не найдена.');
+        }
+        return { sha: shortSha(point.sha), date: point.date };
     }
 
     /**
@@ -180,7 +176,7 @@ class BranchAgeService {
      * @returns {string}
      */
     #keyOf(model, branch) {
-        return [model.rootPath, model.base?.sha ?? '', branch.refname, branch.sha].join('\0');
+        return [model.rootPath, model.base?.sha ?? '', model.mainBranchName ?? '', branch.refname, branch.sha].join('\0');
     }
 
     /**
@@ -214,104 +210,73 @@ class BranchAgeService {
      * @returns {Promise<BranchAge>}
      */
     async #compute(model, branch) {
-        if (model.base === undefined) {
-            throw new Error('The base branch is not resolved.');
-        }
-        const ownCommits = await execGit(this.#gitPath, model.rootPath, [
-            'log',
-            '--reverse',
-            '--format=%at',
-            `${model.base.sha}..${branch.sha}`,
-            '--',
-        ]);
-        const firstOwnCommit = parseOldestTimestamp(ownCommits);
-        if (firstOwnCommit !== undefined) {
-            return resolvedAge(firstOwnCommit, 'firstCommit', false);
-        }
-
-        const isMerged = branch.sha !== model.base.sha;
-        if (isMerged) {
-            const line = await this.#readBranchLine(model, branch);
-            if (line.lineStartDate !== undefined) {
-                return resolvedAge(line.lineStartDate, 'branchLine', true);
-            }
-            const created = branch.kind === 'local' ? await this.#readCreation(model, branch) : undefined;
-            if (created !== undefined) {
-                return resolvedAge(created, 'reflog', true);
-            }
-            return resolvedAge(line.tipDate, 'tip', true);
-        }
-
-        const created = branch.kind === 'local' ? await this.#readCreation(model, branch) : undefined;
-        return resolvedAge(created, created === undefined ? 'none' : 'reflog', false);
-    }
-
-    /**
-     * @param {RepositoryModel} model with a resolved base
-     * @param {Branch} branch
-     * @returns {Promise<import('./branchRefs').BranchLine>}
-     */
-    async #readBranchLine(model, branch) {
-        const [baseLine, log] = await Promise.all([
-            this.#baseLineOf(model),
-            execGit(this.#gitPath, model.rootPath, [
-                'log',
-                '--first-parent',
-                `--max-count=${BRANCH_LINE_LIMIT}`,
-                `--format=${BRANCH_LINE_FORMAT}`,
-                branch.sha,
-                '--',
-            ]),
-        ]);
-        return parseBranchLine(log, baseLine);
-    }
-
-    /**
-     * @param {RepositoryModel} model with a resolved base
-     * @returns {Promise<Set<string>>}
-     */
-    #baseLineOf(model) {
-        if (model.base === undefined) {
-            throw new Error('The base branch is not resolved.');
-        }
-        const cached = this.#baseLines.get(model.rootPath);
-        if (cached !== undefined && cached.sha === model.base.sha) {
-            return cached.shas;
-        }
-        const shas = execGit(this.#gitPath, model.rootPath, ['rev-list', '--first-parent', model.base.sha])
-            .then((output) => new Set(output.split('\n').filter((line) => line !== '')));
-        shas.catch(() => this.#baseLines.delete(model.rootPath));
-        this.#baseLines.set(model.rootPath, { sha: model.base.sha, shas });
-        return shas;
-    }
-
-    /**
-     * @param {RepositoryModel} model
-     * @param {Branch} branch
-     * @returns {Promise<number | undefined>}
-     */
-    async #readCreation(model, branch) {
-        return parseReflogCreation(await this.#readReflog(model, branch));
-    }
-
-    /**
-     * @param {RepositoryModel} model
-     * @param {Branch} branch
-     * @returns {Promise<string>} empty when the branch has no reflog
-     */
-    async #readReflog(model, branch) {
-        try {
-            return await execGit(this.#gitPath, model.rootPath, [
-                'reflog',
-                'show',
-                '--date=unix',
-                `--format=${REFLOG_FORMAT}`,
-                branch.refname,
-                '--',
+        if (model.isMainBranch(branch)) {
+            const roots = await execGit(this.#gitPath, model.rootPath, [
+                'log', '--first-parent', '--format=%ct', branch.sha, '--',
             ]);
-        } catch {
-            return '';
+            const timestamp = roots.trim().split('\n').pop();
+            const since = timestamp !== undefined && /^\d+$/.test(timestamp) ? Number(timestamp) : undefined;
+            return resolvedAge(since, since === undefined ? 'none' : 'historyRoot', false);
         }
+        if (model.base === undefined) {
+            throw new Error('The base branch is not resolved.');
+        }
+        const point = await this.#readBranchPoint(model, branch);
+        const own = await execGit(this.#gitPath, model.rootPath, [
+            'rev-list', '--max-count=1', `${model.base.sha}..${branch.sha}`, '--',
+        ]);
+        const behind = await execGit(this.#gitPath, model.rootPath, [
+            'rev-list', '--max-count=1', `${branch.sha}..${model.base.sha}`, '--',
+        ]);
+        const baseLine = await execGit(this.#gitPath, model.rootPath, [
+            'rev-list', '--first-parent', model.base.sha, '--',
+        ]);
+        const defaultBranch = model.branches.find((candidate) => model.isMainBranch(candidate));
+        let defaultStart;
+        if (defaultBranch !== undefined) {
+            const dates = await execGit(this.#gitPath, model.rootPath, [
+                'log', '--first-parent', '--format=%ct', defaultBranch.sha, '--',
+            ]);
+            defaultStart = Number(dates.trim().split('\n').pop());
+        }
+        const predatesDefault = point !== undefined && defaultStart !== undefined && point.date < defaultStart;
+        const status = classifyBranch(branch.sha === model.base.sha, own.trim() !== '', behind.trim() !== '',
+            baseLine.trim().split('\n').includes(branch.sha));
+        return { ...resolvedAge(point?.date, point === undefined ? 'none' : 'branchLine', status === 'merged'),
+            status, predatesDefault };
+
+    }
+
+    /**
+     * @param {RepositoryModel} model
+     * @param {Branch} branch
+     * @returns {Promise<{sha: string, date: number} | undefined>}
+     */
+    async #readBranchPoint(model, branch) {
+        if (model.base === undefined || branch.sha === model.base.sha) {
+            return undefined;
+        }
+        const readLine = (/** @type {string} */ sha) => execGit(this.#gitPath, model.rootPath, [
+            'log', '--first-parent', '--format=%H %ct', sha, '--',
+        ]);
+        const [branchLog, baseLog] = await Promise.all([readLine(branch.sha), readLine(model.base.sha)]);
+        const point = findBranchPoint(branchLog, baseLog);
+        if (point !== undefined) {
+            return point;
+        }
+        const merges = await execGit(this.#gitPath, model.rootPath, [
+            'log', '--first-parent', '--merges', '--format=%P', branch.sha, '--',
+        ]);
+        for (const parents of merges.trim().split('\n')) {
+            const [, ...incoming] = parents.split(' ');
+            for (const parent of incoming) {
+                const candidate = findBranchPoint(branchLog, await readLine(parent));
+                if (candidate !== undefined) {
+                    return candidate;
+                }
+            }
+        }
+        return undefined;
     }
 }
 

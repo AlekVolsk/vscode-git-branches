@@ -36,7 +36,7 @@ const { SkillLauncher } = require('./skillLauncher');
  */
 
 const VIEW_ID = 'gitBranches.view';
-const SETTINGS_AFFECTING_TREE = Object.freeze(['gitBranches.baseBranch', 'git.branchSortOrder']);
+const SETTINGS_AFFECTING_TREE = Object.freeze(['gitBranches.baseBranch', 'gitBranches.staleAfterDays', 'git.branchSortOrder']);
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -110,9 +110,22 @@ function start(context, gitApi, log) {
                 tree.refreshAll();
             }
         }),
+        vscode.commands.registerCommand('gitBranches.copyGroupList', (node) => tree.copyGroupList(node)),
+        ...(['working', 'new', 'merged', 'stale', 'invalid']).map((type) =>
+            vscode.commands.registerCommand(`gitBranches.filter.${type}`, () => {
+                if (type === 'working' || type === 'new' || type === 'merged'
+                    || type === 'stale' || type === 'invalid') {
+                    tree.setTypeFilter(type);
+                }
+            })),
         vscode.commands.registerCommand('gitBranches.refresh', () => tree.refreshAll()),
         vscode.commands.registerCommand('gitBranches.editFilter', () => filterPrompt.open()),
-        vscode.commands.registerCommand('gitBranches.clearFilter', () => tree.setFilter('')),
+        vscode.commands.registerCommand('gitBranches.clearFilter', () => {
+            filterPrompt.clearText();
+            tree.clearFilters();
+        }),
+        vscode.commands.registerCommand('gitBranches.clearTextFilter', () => filterPrompt.clearText()),
+        vscode.commands.registerCommand('gitBranches.clearStatusFilter', () => tree.setTypeFilter(undefined)),
     );
 }
 
